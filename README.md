@@ -7,11 +7,13 @@
 This project predicts relative YouTube thumbnail performance using multi-modal machine learning. By combining OCR-based text features, face and emotion analysis, and deep visual embeddings, the model identifies thumbnail characteristics correlated with higher engagement.
 
 ## Setup
+```
 conda env create -f environment.yml
-
+```
 ## Activation
+```
 conda activate youtube-thumbnail-performance-predictor
-
+```
 ## Project Organization
 
 ```
