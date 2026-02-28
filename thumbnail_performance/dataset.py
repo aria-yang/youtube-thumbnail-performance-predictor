@@ -60,7 +60,7 @@ def main(
     logger.info("Computing normalized performance (Views / Subscribers)...")
     df['normalized_performance'] = df['views'] / (df['subscriber_count'] + 1e-9)
     
-    # Split data to calculate leakage-safe bin boundaries
+    # Split data to calculate leakage safe bin boundaries
     logger.info("Splitting data to calculate leakage-safe percentile bins...")
     train_df, _ = train_test_split(df, test_size=test_size, random_state=random_state)
     
