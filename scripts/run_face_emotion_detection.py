@@ -6,7 +6,7 @@ from thumbnail_performance.face_emotion_detection import extract_face_emotion_fe
 
 def main():
     split_csv = DATA_DIR / "splits" / "random_train.csv"
-    thumbnail_dir = DATA_DIR / "raw" / "thumbnails"
+    thumbnail_dir = DATA_DIR / "thumbnails" / "images"
     out_csv = DATA_DIR / "processed" / "face_emotion_features.csv"
 
     df = pd.read_csv(split_csv)

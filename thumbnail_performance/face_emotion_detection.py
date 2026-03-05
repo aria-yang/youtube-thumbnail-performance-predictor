@@ -8,15 +8,17 @@ import pandas as pd
 from PIL import Image
 
 from facenet_pytorch import MTCNN
-from fer import FER
+from deepface import DeepFace
 
 EMOTIONS = ["angry", "disgust", "fear", "happy", "sad", "surprise", "neutral"]
 
 
-def resolve_thumbnail_path(thumbnail_dir: Path, video_id: str) -> Optional[Path]:
-    """Find <Id>.<ext> in thumbnail_dir for common image extensions."""
-    for ext in [".jpg", ".jpeg", ".png", ".webp"]:
-        p = thumbnail_dir / f"{video_id}{ext}"
+def resolve_thumbnail_path(thumbnail_root: Path, channel: str, video_id: str) -> Optional[Path]:
+    channel_dir = thumbnail_root / channel
+    if not channel_dir.exists():
+        return None
+    for ext in (".jpg", ".jpeg", ".png", ".webp"):
+        p = channel_dir / f"{video_id}{ext}"
         if p.exists():
             return p
     return None
@@ -30,56 +32,50 @@ def _largest_face_area_ratio(boxes: Optional[np.ndarray], w: int, h: int) -> flo
     return float(np.max(areas)) / img_area if img_area > 0 else 0.0
 
 
-def _dominant_emotion(img_np: np.ndarray, fer_model: FER) -> Optional[str]:
+def _dominant_emotion(img_np: np.ndarray) -> Optional[str]:
     """Pick the single highest-confidence emotion across all detected faces."""
     try:
-        dets = fer_model.detect_emotions(img_np)
+        result = DeepFace.analyze(img_np, actions=["emotion"], enforce_detection=False)
+        return result[0]["dominant_emotion"]
     except Exception:
         return None
-    if not dets:
-        return None
-
-    best_e, best_s = None, -1.0
-    for det in dets:
-        emos: Dict[str, float] = det.get("emotions", {}) or {}
-        if not emos:
-            continue
-        e = max(emos, key=emos.get)
-        s = float(emos[e])
-        if s > best_s:
-            best_e, best_s = e, s
-    return best_e
 
 
 def extract_face_emotion_features(
     df: pd.DataFrame,
     thumbnail_dir: Path,
     id_col: str = "Id",
+    channel_col: str = "Channel",
     device: str = "cpu",
 ) -> pd.DataFrame:
-    """
-    Extract face + emotion features indexed by Id.
-
-    Outputs:
-      - num_faces
-      - largest_face_area_ratio
-      - emotion_<7> one-hots
-      - emotion_unknown
-    """
     if id_col not in df.columns:
         raise KeyError(f"Expected column '{id_col}' in dataframe.")
 
+    # channel_col is optional — if missing, thumbnails cannot be looked up
+    has_channel = channel_col in df.columns
+
     thumbnail_dir = Path(thumbnail_dir)
     mtcnn = MTCNN(keep_all=True, device=device)
-    fer_model = FER(mtcnn=True)
 
     rows: List[Dict] = []
 
-    for vid in df[id_col].astype(str).tolist():
-        img_path = resolve_thumbnail_path(thumbnail_dir, vid)
+    for _, row in df.iterrows():
+        vid = str(row[id_col])
+        channel = str(row[channel_col]) if has_channel else ""
+
+        if not has_channel:
+            img_path = None
+        else:
+            img_path = resolve_thumbnail_path(thumbnail_dir, channel, vid)
+
         if img_path is None:
             rows.append(
-                {id_col: vid, "num_faces": 0, "largest_face_area_ratio": 0.0, "dominant_emotion": None}
+                {
+                    id_col: vid,
+                    "num_faces": 0,
+                    "largest_face_area_ratio": 0.0,
+                    "dominant_emotion": None,
+                }
             )
             continue
 
@@ -87,7 +83,12 @@ def extract_face_emotion_features(
             img = Image.open(img_path).convert("RGB")
         except Exception:
             rows.append(
-                {id_col: vid, "num_faces": 0, "largest_face_area_ratio": 0.0, "dominant_emotion": None}
+                {
+                    id_col: vid,
+                    "num_faces": 0,
+                    "largest_face_area_ratio": 0.0,
+                    "dominant_emotion": None,
+                }
             )
             continue
 
@@ -99,11 +100,15 @@ def extract_face_emotion_features(
 
         num_faces = int(0 if boxes is None else len(boxes))
         ratio = _largest_face_area_ratio(boxes, w, h)
-
-        emo = _dominant_emotion(np.array(img), fer_model)
+        emo = _dominant_emotion(np.array(img))
 
         rows.append(
-            {id_col: vid, "num_faces": num_faces, "largest_face_area_ratio": float(ratio), "dominant_emotion": emo}
+            {
+                id_col: vid,
+                "num_faces": num_faces,
+                "largest_face_area_ratio": float(ratio),
+                "dominant_emotion": emo,
+            }
         )
 
     feats = pd.DataFrame(rows).set_index(id_col)
