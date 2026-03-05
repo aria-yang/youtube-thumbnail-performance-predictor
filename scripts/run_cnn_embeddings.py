@@ -19,7 +19,4 @@ def main():
 
 
 if __name__ == "__main__":
-    # Quick smoke test — remove .head(3) for full run
-    df = pd.read_csv(DATA_DIR / "splits" / "random_train.csv").head(3)
-    feats = extract_cnn_embeddings(df, thumbnail_dir=DATA_DIR / "thumbnails" / "images", id_col="Id", device="cpu")
-    print(feats[["cnn_0", "cnn_1", "cnn_missing"]])  # preview first 2 dims + missing flag
+   main()
