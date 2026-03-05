@@ -7,12 +7,14 @@ dependencies:
   - typer
   - loguru
   - tqdm
+  - easyocr
   - ipython
   - jupyterlab
   - matplotlib
   - notebook
   - numpy
   - pandas
+  - pillow
   - scikit-learn
   - black
   - flake8
