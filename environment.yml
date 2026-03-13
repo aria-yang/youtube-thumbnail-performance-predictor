@@ -18,6 +18,7 @@ dependencies:
   - scikit-learn
   - black
   - flake8
+  - facenet_pytorch
   - isort
   - pytest
   - pip:
