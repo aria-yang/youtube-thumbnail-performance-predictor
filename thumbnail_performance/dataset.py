@@ -92,5 +92,32 @@ def main(
     logger.success(f"Processing complete. Saved {len(df)} records.")
     logger.info(f"Class Distribution:\n{df['engagement_label'].value_counts().sort_index()}")
 
+class ThumbnailDataset(Dataset):
+    """
+    Loads pre-extracted embeddings aligned to labeled_data.csv row order.
+
+    Expected files in data/processed/:
+        cnn_embeddings.npy   shape (N, 512)
+        text_embeddings.npy  shape (N, 768)
+        face_embeddings.npy  shape (N, 128)
+    """
+    def __init__(self, csv_path, cnn_path, text_path, face_path):
+        import numpy as np
+        df = pd.read_csv(csv_path)
+        self.labels = torch.tensor(
+            df["engagement_label"].astype(int).values, dtype=torch.long
+        )
+        self.cnn  = torch.tensor(np.load(cnn_path),  dtype=torch.float32)
+        self.text = torch.tensor(np.load(text_path), dtype=torch.float32)
+        self.face = torch.tensor(np.load(face_path), dtype=torch.float32)
+        assert len(self.cnn) == len(self.labels), \
+            f"Embedding/label mismatch: {len(self.cnn)} vs {len(self.labels)}"
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, idx):
+        return self.cnn[idx], self.text[idx], self.face[idx], self.labels[idx]
+
 if __name__ == "__main__":
     app()
