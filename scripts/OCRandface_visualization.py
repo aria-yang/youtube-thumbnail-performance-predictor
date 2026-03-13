@@ -121,8 +121,8 @@ def make_qualitative_figure(
         axes = [axes]
 
     fig.suptitle(
-        "Appendix: Qualitative Examples — Detected Faces, Emotions & OCR Text",
-        fontsize=13, fontweight="bold", color="white", y=1.01
+        "Figure 1: Examples of Detected Faces, Emotions, and OCR Text",
+        fontsize=17, fontweight="bold", color="white", y=1.01
     )
 
     for ax, (vid, channel, img_path, label) in zip(axes, selected):
