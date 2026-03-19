@@ -1,3 +1,5 @@
+import torch
+
 def compute_class_weights(labels: torch.Tensor, num_classes: int = 5) -> torch.Tensor:
     """
     Inverse-frequency class weights to penalise errors on rare classes more.
