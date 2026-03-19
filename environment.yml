@@ -12,14 +12,18 @@ dependencies:
   - jupyterlab
   - matplotlib
   - notebook
-  - numpy
+  - numpy>=1.24.0,<2.0.0
   - pandas
   - pillow
   - scikit-learn
   - black
   - flake8
+  - facenet_pytorch
   - isort
   - pytest
   - pip:
     - python-dotenv
+    - deepface
+    - tf-keras
+    - opencv-python<4.9.0
     - -e .
