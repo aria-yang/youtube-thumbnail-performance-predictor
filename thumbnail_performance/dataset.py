@@ -5,6 +5,8 @@ from sklearn.model_selection import train_test_split
 from loguru import logger
 from tqdm import tqdm
 import typer
+import torch
+from torch.utils.data import Dataset
 
 from thumbnail_performance.config import PROCESSED_DATA_DIR, RAW_DATA_DIR
 

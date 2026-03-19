@@ -1,6 +1,22 @@
 from thumbnail_performance.modeling.fusion_mlp import FusionMLP, EarlyStopping
 from thumbnail_performance.dataset import ThumbnailDataset
 
+import sys, os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import numpy as np
+from torch.utils.data import DataLoader, random_split
+from sklearn.preprocessing import label_binarize
+from sklearn.metrics import roc_auc_score
+
+from thumbnail_performance.modeling.fusion_mlp import FusionMLP, EarlyStopping
+from thumbnail_performance.dataset import ThumbnailDataset
+from thumbnail_performance.config import PROCESSED_DATA_DIR
+
+
 def train(
     model:       FusionMLP,
     train_loader: DataLoader,
@@ -116,3 +132,26 @@ def compute_auroc(
     auroc = roc_auc_score(labels_bin, all_probs, multi_class="ovr", average="macro")
     return float(auroc)
 
+if __name__ == "__main__":
+    from utils.class_weights import compute_class_weights
+
+    CSV   = PROCESSED_DATA_DIR / "labeled_data.csv"
+    CNN   = PROCESSED_DATA_DIR / "cnn_embeddings.npy"
+    TEXT  = PROCESSED_DATA_DIR / "text_embeddings.npy"
+    FACE  = PROCESSED_DATA_DIR / "face_embeddings.npy"
+
+    dataset = ThumbnailDataset(CSV, CNN, TEXT, FACE)
+
+    n_val   = int(0.15 * len(dataset))
+    n_train = len(dataset) - n_val
+    train_ds, val_ds = random_split(dataset, [n_train, n_val])
+
+    train_loader = DataLoader(train_ds, batch_size=64, shuffle=True)
+    val_loader   = DataLoader(val_ds,   batch_size=64, shuffle=False)
+
+    all_labels    = torch.stack([dataset[i][3] for i in range(len(dataset))])
+    class_weights = compute_class_weights(all_labels, num_classes=5)
+
+    model = FusionMLP(cnn_dim=512, text_dim=4, face_dim=10)
+    history = train(model, train_loader, val_loader,
+                    class_weights=class_weights, device="cpu")

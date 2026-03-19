@@ -124,3 +124,26 @@ def extract_cnn_embeddings(
         rows.append(entry)
 
     return pd.DataFrame(rows).set_index(id_col)
+
+if __name__ == "__main__":
+    from tqdm import tqdm
+    from thumbnail_performance.config import PROCESSED_DATA_DIR, RAW_DATA_DIR
+
+    df = pd.read_csv(PROCESSED_DATA_DIR / "labeled_data.csv")
+    thumbnail_dir = RAW_DATA_DIR.parent / "thumbnails" / "images"
+
+    model = build_embedding_model(device="cpu")
+    all_embeddings = np.zeros((len(df), EMBEDDING_DIM), dtype=np.float32)
+
+    for i, row in tqdm(df.iterrows(), total=len(df), desc="CNN embeddings"):
+        vid = str(row["Id"])
+        channel = str(row["Channel"])
+        img_path = resolve_thumbnail_path(thumbnail_dir, channel, vid)
+
+        if img_path is not None:
+            result = _embed_image(img_path, model, device="cpu")
+            if result is not None:
+                all_embeddings[i] = result
+
+    np.save(PROCESSED_DATA_DIR / "cnn_embeddings.npy", all_embeddings)
+    print(f"Saved cnn_embeddings.npy — shape {all_embeddings.shape}")
