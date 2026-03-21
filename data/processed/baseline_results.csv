@@ -1,0 +1,3 @@
+,AUROC,AUPRC,Accuracy,Precision,Recall
+Random,0.5067,0.204,0.2116,0.2063,0.2105
+CNN-only,0.6073,0.2928,0.3307,0.3224,0.3263
