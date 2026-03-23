@@ -15,6 +15,32 @@ FOLDER STRUCTURE OUTPUT:
     │   ├── images/               <- your existing thumbnails (untouched)
     │   └── new_images/           <- freshly scraped thumbnails (this script)
 
+USAGE:
+
+  Step 1 — Scrape new data:
+    python fetch_youtube_data.py \
+        --api_key YOUR_KEY \
+        --channels_file channels.txt \
+        --max_per_channel 50
+
+  Step 2 — (Optional) Merge with existing data:
+    python fetch_youtube_data.py --merge
+
+  Step 3 — Run pipeline on NEW data only:
+    python thumbnail_performance/dataset.py \
+        --input_path data/raw/new_data.csv \
+        --output_path data/processed/new_labeled_data.csv
+
+  OR on MERGED data:
+    python thumbnail_performance/dataset.py \
+        --input_path data/raw/merged_data.csv \
+        --output_path data/processed/labeled_data.csv
+
+GET AN API KEY:
+    https://console.cloud.google.com/
+    -> Enable "YouTube Data API v3"
+    -> Credentials -> Create API Key
+
 DAILY QUOTA: 10,000 units/day (free)
     search (resolve handle):      100 units each
     channels (subscriber count):  1 unit each
@@ -39,6 +65,10 @@ from loguru import logger
 from tqdm import tqdm
 
 
+# ---------------------------------------------------------------------------
+# Paths — edit if your project layout differs
+# ---------------------------------------------------------------------------
+
 DATA_DIR        = Path("data")
 RAW_DIR         = DATA_DIR / "raw"
 THUMB_DIR       = DATA_DIR / "thumbnails"
@@ -61,7 +91,9 @@ CATEGORY_MAP = {
 }
 
 
+# ---------------------------------------------------------------------------
 # API helpers
+# ---------------------------------------------------------------------------
 
 def get_channel_id(api_key: str, handle: str) -> str | None:
     """Resolve @handle or channel name to a channel ID. Costs 100 units."""
@@ -107,15 +139,20 @@ def get_channel_info(api_key: str, channel_id: str) -> dict:
     }
 
 
-def get_video_ids(api_key: str, playlist_id: str, max_videos: int) -> list[str]:
-    """Pages through uploads playlist to collect video IDs. Costs 1 unit/page (50 videos)."""
+def get_video_ids(api_key: str, playlist_id: str, max_videos: int, skip: int = 0) -> list[str]:
+    """
+    Pages through uploads playlist to collect video IDs.
+    skip: number of most recent videos to skip before collecting.
+    Costs 1 unit/page (50 videos per page).
+    """
     video_ids, next_page_token = [], None
+    skipped = 0
 
     while len(video_ids) < max_videos:
         params = {
             "part": "contentDetails",
             "playlistId": playlist_id,
-            "maxResults": min(50, max_videos - len(video_ids)),
+            "maxResults": 50,
             "key": api_key,
         }
         if next_page_token:
@@ -126,7 +163,11 @@ def get_video_ids(api_key: str, playlist_id: str, max_videos: int) -> list[str]:
         data = resp.json()
 
         for item in data.get("items", []):
-            video_ids.append(item["contentDetails"]["videoId"])
+            if skipped < skip:
+                skipped += 1
+                continue
+            if len(video_ids) < max_videos:
+                video_ids.append(item["contentDetails"]["videoId"])
 
         next_page_token = data.get("nextPageToken")
         if not next_page_token:
@@ -205,13 +246,17 @@ def download_thumbnail(video_id: str, url: str, out_dir: Path) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
 # Core scraping function
-def scrape(api_key: str, channel_handles: list[str], max_per_channel: int):
+# ---------------------------------------------------------------------------
+
+def scrape(api_key: str, channel_handles: list[str], max_per_channel: int, skip: int = 0):
     """
     Scrapes all channels. Saves to:
       data/raw/new_data.csv
       data/thumbnails/new_images/
     Existing data is never touched.
+    skip: number of most recent videos to skip per channel (use 50 on day 2, 100 on day 3, etc.)
     """
     NEW_THUMBS.mkdir(parents=True, exist_ok=True)
     NEW_CSV.parent.mkdir(parents=True, exist_ok=True)
@@ -236,7 +281,7 @@ def scrape(api_key: str, channel_handles: list[str], max_per_channel: int):
         if not info:
             continue
 
-        video_ids = get_video_ids(api_key, info["playlist_id"], max_per_channel)
+        video_ids = get_video_ids(api_key, info["playlist_id"], max_per_channel, skip=skip)
         new_ids   = [v for v in video_ids if v not in existing_ids]
 
         if not new_ids:
@@ -289,7 +334,9 @@ def scrape(api_key: str, channel_handles: list[str], max_per_channel: int):
     logger.info(f"    python thumbnail_performance/dataset.py --input_path {MERGED_CSV} --output_path data/processed/labeled_data.csv")
 
 
+# ---------------------------------------------------------------------------
 # Merge helper
+# ---------------------------------------------------------------------------
 
 def merge():
     """Combines data.csv + new_data.csv -> merged_data.csv, deduped by Id."""
@@ -316,7 +363,9 @@ def merge():
     logger.info(f"  python training/train_fusion.py")
 
 
+# ---------------------------------------------------------------------------
 # CLI
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="YouTube thumbnail scraper")
@@ -326,6 +375,8 @@ if __name__ == "__main__":
                         help="Path to text file with one channel handle per line")
     parser.add_argument("--max_per_channel", type=int, default=50,
                         help="Max videos to pull per channel (default: 50)")
+    parser.add_argument("--skip",            type=int, default=0,
+                        help="Number of most recent videos to skip per channel. Use 50 on day 2, 100 on day 3, etc.")
     parser.add_argument("--merge",           action="store_true",
                         help="Skip scraping, just merge existing + new CSVs")
     args = parser.parse_args()
@@ -340,4 +391,4 @@ if __name__ == "__main__":
             raise FileNotFoundError(f"Could not find {channels_path}")
         handles = [l.strip() for l in channels_path.read_text().splitlines() if l.strip()]
         logger.info(f"Loaded {len(handles)} channels from {channels_path}")
-        scrape(args.api_key, handles, args.max_per_channel)
+        scrape(args.api_key, handles, args.max_per_channel, skip=args.skip)
