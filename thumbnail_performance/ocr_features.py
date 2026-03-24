@@ -1,13 +1,9 @@
 """
 Extract OCR-derived thumbnail text features.
-
-Output features (indexed by thumbnail_id):
-  - word_count
-  - capital_letter_pct
-  - has_numeric
-  - char_count
 """
 
+import argparse
+import os
 import re
 import string
 import warnings
@@ -19,35 +15,29 @@ import pandas as pd
 from PIL import Image
 from tqdm import tqdm
 
-import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-
 warnings.filterwarnings("ignore")
 
 _EASYOCR_READER: Optional[Any] = None
+_EASYOCR_READER_GPU: Optional[bool] = None
 
 
 def get_easyocr_reader(languages: Optional[list[str]] = None, gpu: bool = False):
-    """
-    Lazily initialize and reuse EasyOCR reader.
-    """
-    global _EASYOCR_READER
-    if _EASYOCR_READER is None:
+    global _EASYOCR_READER, _EASYOCR_READER_GPU
+    if _EASYOCR_READER is None or _EASYOCR_READER_GPU != gpu:
         import easyocr
 
         _EASYOCR_READER = easyocr.Reader(languages or ["en"], gpu=gpu, verbose=False)
+        _EASYOCR_READER_GPU = gpu
     return _EASYOCR_READER
 
 
-def run_easyocr(img_array: np.ndarray) -> list[tuple[Any, str, float]]:
-    reader = get_easyocr_reader()
+def run_easyocr(img_array: np.ndarray, gpu: bool = False) -> list[tuple[Any, str, float]]:
+    reader = get_easyocr_reader(gpu=gpu)
     return reader.readtext(img_array)
 
 
 def run_tesseract(img_array: np.ndarray) -> list[tuple[Any, str, float]]:
-    """
-    Tesseract backend wrapper with EasyOCR-compatible output schema.
-    """
     import pytesseract
 
     text = pytesseract.image_to_string(img_array) or ""
@@ -55,11 +45,6 @@ def run_tesseract(img_array: np.ndarray) -> list[tuple[Any, str, float]]:
 
 
 def preprocess_image(img_path: str) -> np.ndarray:
-    """
-    Light preprocessing to improve OCR accuracy on thumbnails:
-      - Upscale small images (OCR degrades below ~300px width)
-      - Convert to RGB (handles PNGs with alpha channels)
-    """
     img = Image.open(img_path).convert("RGB")
     w, h = img.size
     if w < 640:
@@ -69,12 +54,6 @@ def preprocess_image(img_path: str) -> np.ndarray:
 
 
 def clean_ocr_text(raw_results: list[tuple[Any, str, float]]) -> str:
-    """
-    Post-process raw OCR output:
-      - Filter low-confidence detections (threshold = 0.4)
-      - Strip non-printable characters
-      - Collapse extra whitespace
-    """
     confidence_threshold = 0.4
     tokens = []
     for (_, text, confidence) in raw_results:
@@ -86,17 +65,11 @@ def clean_ocr_text(raw_results: list[tuple[Any, str, float]]) -> str:
 
 
 def thumbnail_id_from_path(path_value: str) -> str:
-    """
-    Return normalized thumbnail ID from filename/path input.
-    """
     stem = Path(path_value).stem
     return re.sub(r"[^a-z0-9_-]", "", stem.lower())
 
 
 def compute_text_features(text: str) -> dict:
-    """
-    Compute required text features from a cleaned OCR string.
-    """
     words = text.split()
     alpha_chars = [c for c in text if c.isalpha()]
 
@@ -118,14 +91,15 @@ def compute_text_features(text: str) -> dict:
     }
 
 
-def extract_ocr_features(img_path: str, backend: str = "easyocr") -> dict:
-    """
-    Extract text features from a single thumbnail image.
-    """
+def extract_ocr_features(
+    img_path: str,
+    backend: str = "easyocr",
+    use_gpu: bool = False,
+) -> dict:
     try:
         img_array = preprocess_image(img_path)
         if backend == "easyocr":
-            raw_results = run_easyocr(img_array)
+            raw_results = run_easyocr(img_array, gpu=use_gpu)
         elif backend == "tesseract":
             raw_results = run_tesseract(img_array)
         else:
@@ -142,19 +116,18 @@ def build_ocr_feature_dataframe(
     extensions: tuple = (".jpg", ".jpeg", ".png", ".webp"),
     save_path: Optional[str] = None,
     backend: str = "easyocr",
-    valid_ids: Optional[set] = None,  # ← add this
+    valid_ids: Optional[set] = None,
+    use_gpu: bool = False,
 ) -> pd.DataFrame:
-    """
-    Run OCR extraction over an entire directory of thumbnails.
-
-    Filenames (without extension) are used as thumbnail IDs.
-    """
     image_dir = Path(thumbnail_dir)
-    image_paths = sorted([
-        path for path in image_dir.rglob("*")
-        if path.suffix.lower() in extensions
-        and (valid_ids is None or path.stem in valid_ids)
-    ])
+    image_paths = sorted(
+        [
+            path
+            for path in image_dir.rglob("*")
+            if path.suffix.lower() in extensions
+            and (valid_ids is None or path.stem in valid_ids)
+        ]
+    )
 
     if not image_paths:
         raise FileNotFoundError(f"No images found in {image_dir}")
@@ -162,7 +135,11 @@ def build_ocr_feature_dataframe(
     records = []
     for img_path in tqdm(image_paths, desc="Extracting OCR features"):
         thumbnail_id = img_path.stem
-        features = extract_ocr_features(str(img_path), backend=backend)
+        features = extract_ocr_features(
+            str(img_path),
+            backend=backend,
+            use_gpu=use_gpu,
+        )
         features["thumbnail_id"] = thumbnail_id
         records.append(features)
 
@@ -178,11 +155,12 @@ def build_ocr_feature_dataframe(
     return df
 
 
-def demo_single_image(img_path: str, backend: str = "easyocr") -> None:
-    """
-    Print OCR features for one image.
-    """
-    features = extract_ocr_features(img_path, backend=backend)
+def demo_single_image(
+    img_path: str,
+    backend: str = "easyocr",
+    use_gpu: bool = False,
+) -> None:
+    features = extract_ocr_features(img_path, backend=backend, use_gpu=use_gpu)
     print(f"\n{'=' * 50}")
     print(f"Thumbnail : {img_path}")
     print(f"Raw text  : {features['raw_text']!r}")
@@ -194,18 +172,73 @@ def demo_single_image(img_path: str, backend: str = "easyocr") -> None:
 
 
 if __name__ == "__main__":
-    from thumbnail_performance.config import PROCESSED_DATA_DIR
+    from thumbnail_performance.config import PROCESSED_DATA_DIR, RAW_DATA_DIR
 
-    labeled = pd.read_csv(PROCESSED_DATA_DIR / "labeled_data.csv")
-    valid_ids = set(labeled["Id"].astype(str))
-
-    df = build_ocr_feature_dataframe(
-        thumbnail_dir="data/thumbnails/images",
-        save_path=str(PROCESSED_DATA_DIR / "ocr_features.csv"),
-        valid_ids=valid_ids,
+    parser = argparse.ArgumentParser(description="Extract OCR features from thumbnails.")
+    parser.add_argument(
+        "--csv_path",
+        type=Path,
+        default=PROCESSED_DATA_DIR / "labeled_data.csv",
+        help="Path to labeled CSV used to define row order.",
     )
+    parser.add_argument(
+        "--thumbnail_dir",
+        type=Path,
+        default=RAW_DATA_DIR.parent / "thumbnails" / "images",
+        help="Root directory containing thumbnails.",
+    )
+    parser.add_argument(
+        "--ocr_csv_path",
+        type=Path,
+        default=PROCESSED_DATA_DIR / "ocr_features.csv",
+        help="Path to save OCR feature CSV.",
+    )
+    parser.add_argument(
+        "--output_path",
+        type=Path,
+        default=PROCESSED_DATA_DIR / "text_embeddings.npy",
+        help="Path to save text feature array.",
+    )
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default="easyocr",
+        choices=["easyocr", "tesseract"],
+        help="OCR engine backend.",
+    )
+    parser.add_argument(
+        "--use_gpu",
+        action="store_true",
+        help="Enable GPU for EasyOCR if available.",
+    )
+    parser.add_argument(
+        "--demo",
+        type=str,
+        default=None,
+        help="Optional path to a single image for a quick demo.",
+    )
+    args = parser.parse_args()
 
-    feat_cols = ["word_count", "capital_letter_pct", "has_numeric", "char_count"]
-    arr = df.reindex(labeled["Id"].astype(str))[feat_cols].fillna(0).values.astype(np.float32)
-    np.save(PROCESSED_DATA_DIR / "text_embeddings.npy", arr)
-    print(f"Saved text_embeddings.npy — shape {arr.shape}")
+    if args.demo:
+        demo_single_image(args.demo, backend=args.backend, use_gpu=args.use_gpu)
+    else:
+        labeled = pd.read_csv(args.csv_path)
+        valid_ids = set(labeled["Id"].astype(str))
+
+        df = build_ocr_feature_dataframe(
+            thumbnail_dir=str(args.thumbnail_dir),
+            save_path=str(args.ocr_csv_path),
+            valid_ids=valid_ids,
+            backend=args.backend,
+            use_gpu=args.use_gpu,
+        )
+
+        feat_cols = ["word_count", "capital_letter_pct", "has_numeric", "char_count"]
+        arr = (
+            df.reindex(labeled["Id"].astype(str))[feat_cols]
+            .fillna(0)
+            .values.astype(np.float32)
+        )
+        args.output_path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(args.output_path, arr)
+        print(f"Saved {args.output_path.name} - shape {arr.shape}")
