@@ -12,6 +12,32 @@ from thumbnail_performance.config import PROCESSED_DATA_DIR, RAW_DATA_DIR
 
 app = typer.Typer()
 
+
+def read_csv_with_fallback(path: Path | str, **kwargs) -> pd.DataFrame:
+    """
+    Read CSV files that may have been saved with a legacy encoding.
+
+    The dataset includes channel names such as "Bon Appétit", and some CSVs in this
+    project were written in a non-UTF-8 encoding. We try UTF-8 first, then fall back
+    to common single-byte encodings used by spreadsheet exports.
+    """
+    encodings = ("utf-8", "utf-8-sig", "cp1252", "latin-1")
+    last_error = None
+
+    for encoding in encodings:
+        try:
+            return pd.read_csv(path, encoding=encoding, **kwargs)
+        except UnicodeDecodeError as exc:
+            last_error = exc
+
+    raise UnicodeDecodeError(
+        last_error.encoding if last_error else "unknown",
+        last_error.object if last_error else b"",
+        last_error.start if last_error else 0,
+        last_error.end if last_error else 0,
+        f"Unable to decode CSV at {path} using tried encodings: {encodings}",
+    )
+
 def parse_abbreviated_numeric(val):
     """
     Parses strings like '10M views' or '3.35M subscribers' into float values.
@@ -41,7 +67,7 @@ def main(
     random_state: int = 42
 ):
     logger.info(f"Loading dataset from {input_path}...")
-    df = pd.read_csv(input_path)
+    df = read_csv_with_fallback(input_path)
     logger.info(f"Original dataset shape: {df.shape}")
     
     # Data Cleaning: Drop unnecessary text columns
@@ -105,7 +131,7 @@ class ThumbnailDataset(Dataset):
     """
     def __init__(self, csv_path, cnn_path, text_path, face_path):
         import numpy as np
-        df = pd.read_csv(csv_path)
+        df = read_csv_with_fallback(csv_path)
         self.labels = torch.tensor(
             df["engagement_label"].astype(int).values, dtype=torch.long
         )

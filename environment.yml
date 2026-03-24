@@ -16,6 +16,7 @@ dependencies:
   - pandas
   - pillow
   - scikit-learn
+  - shap
   - black
   - flake8
   - facenet_pytorch
