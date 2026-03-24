@@ -23,7 +23,27 @@ from training.train_fusion import train
 from utils.class_weights import compute_class_weights
 
 
-def resolve_across_roots(thumbnail_dirs: list[Path], channel: str, video_id: str) -> Path | None:
+def build_thumbnail_index(thumbnail_dirs: list[Path]) -> dict[str, Path]:
+    index: dict[str, Path] = {}
+    for root in thumbnail_dirs:
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
+                index.setdefault(path.stem, path)
+    return index
+
+
+def resolve_across_roots(
+    thumbnail_dirs: list[Path],
+    thumbnail_index: dict[str, Path],
+    channel: str,
+    video_id: str,
+) -> Path | None:
+    direct_match = thumbnail_index.get(video_id)
+    if direct_match is not None:
+        return direct_match
+
     for root in thumbnail_dirs:
         img_path = resolve_cnn_path(root, channel, video_id)
         if img_path is not None:
@@ -40,6 +60,8 @@ def run_cnn_stage(
 ) -> None:
     df = pd.read_csv(csv_path)
     df["Id"] = df["Id"].astype(str)
+    thumbnail_index = build_thumbnail_index(thumbnail_dirs)
+    print(f"CNN stage thumbnail index: {len(thumbnail_index)} files discovered")
 
     if cache_path.exists():
         cached = pd.read_csv(cache_path, index_col="Id")
@@ -65,7 +87,7 @@ def run_cnn_stage(
     ):
         vid = str(row["Id"])
         channel = str(row["Channel"])
-        img_path = resolve_across_roots(thumbnail_dirs, channel, vid)
+        img_path = resolve_across_roots(thumbnail_dirs, thumbnail_index, channel, vid)
         embedding = np.zeros(EMBEDDING_DIM, dtype=np.float32)
         missing = 1
 
@@ -205,8 +227,11 @@ def run_face_stage(
     device: str,
 ) -> None:
     df = pd.read_csv(csv_path)
+    df["Id"] = df["Id"].astype(str)
     frames = []
-    remaining_ids = set(df["Id"].astype(str))
+    remaining_ids = set(df["Id"])
+    thumbnail_index = build_thumbnail_index(thumbnail_dirs)
+    print(f"Face stage thumbnail index: {len(thumbnail_index)} files discovered")
 
     if cache_path.exists():
         cached = pd.read_csv(cache_path, index_col="Id")
@@ -220,13 +245,20 @@ def run_face_stage(
     for thumbnail_dir in thumbnail_dirs:
         if not remaining_ids:
             break
+        root_index = build_thumbnail_index([thumbnail_dir])
         root_ids = []
-        for _, row in df.loc[df["Id"].astype(str).isin(remaining_ids)].iterrows():
-            if resolve_cnn_path(thumbnail_dir, str(row["Channel"]), str(row["Id"])) is not None:
+        for _, row in df.loc[df["Id"].isin(remaining_ids)].iterrows():
+            img_path = resolve_across_roots(
+                [thumbnail_dir],
+                root_index,
+                str(row["Channel"]),
+                str(row["Id"]),
+            )
+            if img_path is not None:
                 root_ids.append(str(row["Id"]))
         if not root_ids:
             continue
-        subset_df = df.loc[df["Id"].astype(str).isin(root_ids)].copy()
+        subset_df = df.loc[df["Id"].isin(root_ids)].copy()
         feats = extract_face_emotion_features(
             subset_df,
             thumbnail_dir=thumbnail_dir,
