@@ -1,6 +1,7 @@
 import argparse
 import os
 from pathlib import Path
+import shutil
 import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -20,6 +21,39 @@ from thumbnail_performance.modeling.fusion_mlp import FusionMLP
 from thumbnail_performance.ocr_features import build_ocr_feature_dataframe
 from training.train_fusion import train
 from utils.class_weights import compute_class_weights
+
+
+def restore_artifact(
+    local_path: Path,
+    artifact_root: Path | None,
+    overwrite: bool = False,
+) -> None:
+    if artifact_root is None:
+        return
+    src = artifact_root / local_path.name
+    if src.exists() and (overwrite or not local_path.exists()):
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, local_path)
+        print(f"Restored {local_path.name} from {src}")
+
+
+def restore_artifacts(local_paths: list[Path], artifact_root: Path | None, overwrite: bool = False) -> None:
+    for local_path in local_paths:
+        restore_artifact(local_path, artifact_root, overwrite=overwrite)
+
+
+def sync_artifact_to_root(local_path: Path, artifact_root: Path | None) -> None:
+    if artifact_root is None or not local_path.exists():
+        return
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    dst = artifact_root / local_path.name
+    shutil.copy2(local_path, dst)
+    print(f"Synced {local_path.name} to {dst}")
+
+
+def sync_artifacts_to_root(local_paths: list[Path], artifact_root: Path | None) -> None:
+    for local_path in local_paths:
+        sync_artifact_to_root(local_path, artifact_root)
 
 
 def build_thumbnail_index(thumbnail_dirs: list[Path]) -> dict[str, Path]:
@@ -428,11 +462,41 @@ if __name__ == "__main__":
         default="cpu",
         help="Torch device for embeddings and training.",
     )
+    parser.add_argument(
+        "--artifact_root",
+        type=Path,
+        default=Path("/content/drive/MyDrive/ECE324/youtube-thumbnail-performance-predictor-artifacts"),
+        help="Directory containing cached/generated artifacts to restore from and sync back to.",
+    )
     args = parser.parse_args()
+    artifact_root = args.artifact_root if args.artifact_root.exists() or "drive" in str(args.artifact_root).lower() else None
     ocr_use_gpu = (
         args.ocr_backend == "easyocr"
         and args.device.startswith("cuda")
         and torch.cuda.is_available()
+    )
+
+    # Always pull the latest CSV artifacts from Drive, even if local copies exist.
+    restore_artifacts(
+        [
+            args.labeled_csv_path,
+            args.cnn_cache_path,
+            args.ocr_csv_path,
+            args.face_cache_path,
+        ],
+        artifact_root,
+        overwrite=True,
+    )
+
+    # Restore large array artifacts only when they are missing locally.
+    restore_artifacts(
+        [
+            args.cnn_output_path,
+            args.text_output_path,
+            args.face_output_path,
+        ],
+        artifact_root,
+        overwrite=False,
     )
 
     print("Stage 1/5: Building labeled dataset")
@@ -483,4 +547,17 @@ if __name__ == "__main__":
         lr=args.lr,
         val_ratio=args.val_ratio,
         device=args.device,
+    )
+
+    sync_artifacts_to_root(
+        [
+            args.labeled_csv_path,
+            args.cnn_output_path,
+            args.cnn_cache_path,
+            args.ocr_csv_path,
+            args.text_output_path,
+            args.face_output_path,
+            args.face_cache_path,
+        ],
+        artifact_root,
     )
