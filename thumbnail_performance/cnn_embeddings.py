@@ -12,7 +12,7 @@ from PIL import Image
 from torchvision import models, transforms
 
 
-EMBEDDING_DIM = 512
+EMBEDDING_DIM = 2048
 
 TRANSFORM = transforms.Compose(
     [
@@ -27,8 +27,8 @@ TRANSFORM = transforms.Compose(
 
 
 def build_embedding_model(device: str = "cpu") -> nn.Module:
-    weights = models.ResNet18_Weights.IMAGENET1K_V1
-    model = models.resnet18(weights=weights)
+    weights = models.ResNet50_Weights.IMAGENET1K_V2
+    model = models.resnet50(weights=weights)
     model.fc = nn.Identity()
 
     for param in model.parameters():
