@@ -171,6 +171,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     dataset = ThumbnailDataset(args.csv_path, args.cnn_path, args.text_path, args.face_path)
+    cnn_dim = int(np.load(args.cnn_path, mmap_mode="r").shape[1])
+    text_dim = int(np.load(args.text_path, mmap_mode="r").shape[1])
+    face_dim = int(np.load(args.face_path, mmap_mode="r").shape[1])
+    print(f"Detected feature dimensions: cnn={cnn_dim}, text={text_dim}, face={face_dim}")
 
     n_val = int(args.val_ratio * len(dataset))
     n_train = len(dataset) - n_val
@@ -182,7 +186,7 @@ if __name__ == "__main__":
     all_labels = torch.stack([dataset[i][3] for i in range(len(dataset))])
     class_weights = compute_class_weights(all_labels, num_classes=5)
 
-    model = FusionMLP(cnn_dim=512, text_dim=4, face_dim=10)
+    model = FusionMLP(cnn_dim=cnn_dim, text_dim=text_dim, face_dim=face_dim)
     train(
         model,
         train_loader,

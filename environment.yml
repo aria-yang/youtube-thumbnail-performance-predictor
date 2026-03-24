@@ -26,4 +26,5 @@ dependencies:
     - deepface
     - tf-keras
     - opencv-python<4.9.0
+    - sentence-transformers
     - -e .
