@@ -79,12 +79,12 @@ def run_ablation_experiment():
    seeds = [42, 43, 44, 45, 46]
    device = "cuda" if torch.cuda.is_available() else "cpu"
   
-   # 1. Load Data
+   # Load Data
    train_loader, val_loader, class_weights = get_real_dataloaders()
    class_weights = class_weights.to(device)
 
 
-   # 2. Dynamically determine actual feature dimensions from the dataset!
+   # Dynamically determine feature dimensions from the dataset
    sample_cnn, sample_text, sample_face, _ = next(iter(train_loader))
    ACTUAL_CNN_DIM = sample_cnn.shape[1]
    ACTUAL_TEXT_DIM = sample_text.shape[1]
@@ -93,7 +93,7 @@ def run_ablation_experiment():
    logger.info(f"Detected Dimensions -> CNN: {ACTUAL_CNN_DIM}, Text: {ACTUAL_TEXT_DIM}, Face: {ACTUAL_FACE_DIM}")
 
 
-   # 3. Define Configurations
+   # Define Configurations
    configs = [
        {"name": "CNN-only", "use_text": False, "use_face": False},
        {"name": "CNN + Text", "use_text": True, "use_face": False},
@@ -114,7 +114,7 @@ def run_ablation_experiment():
        for seed in seeds:
            set_seed(seed)
           
-           # Use the actual dimensions detected from the data!
+           # Use the dimensions detected from the data
            base_model = FusionMLP(
                cnn_dim=ACTUAL_CNN_DIM,
                text_dim=ACTUAL_TEXT_DIM,
@@ -128,7 +128,6 @@ def run_ablation_experiment():
                use_face=config['use_face']
            ).to(device)
           
-           # Suppress teammate's print statements slightly to keep the console clean
            _ = train(
                model=model, train_loader=train_loader, val_loader=val_loader,
                num_epochs=30, lr=1e-3, device=device, class_weights=class_weights
