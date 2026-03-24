@@ -186,3 +186,14 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Generated processed artifacts
+data/processed/*.npy
+data/processed/*cache.csv
+data/processed/merged_ocr_features.csv
+data/processed/ocr_features.csv
+data/processed/new_ocr_features.csv
+data/processed/ocr_scalar_features_unused.npy
+data/processed/merged_title_embedding_cache.csv
+data/processed/merged_labeled_data.csv
+data/processed/new_labeled_data.csv
