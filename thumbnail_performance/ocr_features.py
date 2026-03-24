@@ -19,19 +19,21 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 warnings.filterwarnings("ignore")
 
 _EASYOCR_READER: Optional[Any] = None
+_EASYOCR_READER_GPU: Optional[bool] = None
 
 
 def get_easyocr_reader(languages: Optional[list[str]] = None, gpu: bool = False):
-    global _EASYOCR_READER
-    if _EASYOCR_READER is None:
+    global _EASYOCR_READER, _EASYOCR_READER_GPU
+    if _EASYOCR_READER is None or _EASYOCR_READER_GPU != gpu:
         import easyocr
 
         _EASYOCR_READER = easyocr.Reader(languages or ["en"], gpu=gpu, verbose=False)
+        _EASYOCR_READER_GPU = gpu
     return _EASYOCR_READER
 
 
-def run_easyocr(img_array: np.ndarray) -> list[tuple[Any, str, float]]:
-    reader = get_easyocr_reader()
+def run_easyocr(img_array: np.ndarray, gpu: bool = False) -> list[tuple[Any, str, float]]:
+    reader = get_easyocr_reader(gpu=gpu)
     return reader.readtext(img_array)
 
 
@@ -89,11 +91,15 @@ def compute_text_features(text: str) -> dict:
     }
 
 
-def extract_ocr_features(img_path: str, backend: str = "easyocr") -> dict:
+def extract_ocr_features(
+    img_path: str,
+    backend: str = "easyocr",
+    use_gpu: bool = False,
+) -> dict:
     try:
         img_array = preprocess_image(img_path)
         if backend == "easyocr":
-            raw_results = run_easyocr(img_array)
+            raw_results = run_easyocr(img_array, gpu=use_gpu)
         elif backend == "tesseract":
             raw_results = run_tesseract(img_array)
         else:
@@ -111,6 +117,7 @@ def build_ocr_feature_dataframe(
     save_path: Optional[str] = None,
     backend: str = "easyocr",
     valid_ids: Optional[set] = None,
+    use_gpu: bool = False,
 ) -> pd.DataFrame:
     image_dir = Path(thumbnail_dir)
     image_paths = sorted(
@@ -128,7 +135,11 @@ def build_ocr_feature_dataframe(
     records = []
     for img_path in tqdm(image_paths, desc="Extracting OCR features"):
         thumbnail_id = img_path.stem
-        features = extract_ocr_features(str(img_path), backend=backend)
+        features = extract_ocr_features(
+            str(img_path),
+            backend=backend,
+            use_gpu=use_gpu,
+        )
         features["thumbnail_id"] = thumbnail_id
         records.append(features)
 
@@ -144,8 +155,12 @@ def build_ocr_feature_dataframe(
     return df
 
 
-def demo_single_image(img_path: str, backend: str = "easyocr") -> None:
-    features = extract_ocr_features(img_path, backend=backend)
+def demo_single_image(
+    img_path: str,
+    backend: str = "easyocr",
+    use_gpu: bool = False,
+) -> None:
+    features = extract_ocr_features(img_path, backend=backend, use_gpu=use_gpu)
     print(f"\n{'=' * 50}")
     print(f"Thumbnail : {img_path}")
     print(f"Raw text  : {features['raw_text']!r}")
@@ -192,6 +207,11 @@ if __name__ == "__main__":
         help="OCR engine backend.",
     )
     parser.add_argument(
+        "--use_gpu",
+        action="store_true",
+        help="Enable GPU for EasyOCR if available.",
+    )
+    parser.add_argument(
         "--demo",
         type=str,
         default=None,
@@ -200,7 +220,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.demo:
-        demo_single_image(args.demo, backend=args.backend)
+        demo_single_image(args.demo, backend=args.backend, use_gpu=args.use_gpu)
     else:
         labeled = pd.read_csv(args.csv_path)
         valid_ids = set(labeled["Id"].astype(str))
@@ -210,6 +230,7 @@ if __name__ == "__main__":
             save_path=str(args.ocr_csv_path),
             valid_ids=valid_ids,
             backend=args.backend,
+            use_gpu=args.use_gpu,
         )
 
         feat_cols = ["word_count", "capital_letter_pct", "has_numeric", "char_count"]

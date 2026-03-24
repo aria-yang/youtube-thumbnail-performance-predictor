@@ -124,6 +124,7 @@ def run_ocr_stage(
     output_path: Path,
     backend: str,
     seed_ocr_cache_paths: list[Path],
+    ocr_use_gpu: bool,
 ) -> None:
     labeled = pd.read_csv(csv_path)
     labeled["Id"] = labeled["Id"].astype(str)
@@ -133,7 +134,10 @@ def run_ocr_stage(
     cached = load_ocr_cache_sources(cache_sources)
 
     missing_ids = valid_ids - set(cached.index)
-    print(f"OCR stage: {len(cached)} cached, {len(missing_ids)} to process")
+    print(
+        f"OCR stage: {len(cached)} cached, {len(missing_ids)} to process "
+        f"(backend={backend}, gpu={ocr_use_gpu})"
+    )
     if missing_ids:
         new_frames = []
         remaining_ids = set(missing_ids)
@@ -146,6 +150,7 @@ def run_ocr_stage(
                     thumbnail_dir=str(thumbnail_dir),
                     valid_ids=remaining_ids,
                     backend=backend,
+                    use_gpu=ocr_use_gpu,
                 )
             except FileNotFoundError:
                 continue
@@ -388,6 +393,11 @@ if __name__ == "__main__":
         help="Torch device for embeddings and training.",
     )
     args = parser.parse_args()
+    ocr_use_gpu = (
+        args.ocr_backend == "easyocr"
+        and args.device.startswith("cuda")
+        and torch.cuda.is_available()
+    )
 
     print("Stage 1/5: Building labeled dataset")
     build_labeled_dataset(
@@ -414,6 +424,7 @@ if __name__ == "__main__":
         output_path=args.text_output_path,
         backend=args.ocr_backend,
         seed_ocr_cache_paths=args.seed_ocr_cache_paths,
+        ocr_use_gpu=ocr_use_gpu,
     )
 
     print("Stage 4/5: Extracting face/emotion features")
