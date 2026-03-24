@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 import numpy as np
+import pandas as pd
 from PIL import Image, ImageTk
 
 try:
@@ -21,8 +22,18 @@ except ModuleNotFoundError as exc:
 
 from thumbnail_performance.cnn_embeddings import _embed_image, build_embedding_model
 from thumbnail_performance.config import MODELS_DIR, PROCESSED_DATA_DIR
+from thumbnail_performance.face_emotion_detection import (
+    EMOTIONS,
+    _dominant_emotion,
+    _largest_face_area_ratio,
+)
 from thumbnail_performance.modeling.fusion_mlp import FusionMLP
 from thumbnail_performance.ocr_features import extract_ocr_features
+
+try:
+    from facenet_pytorch import MTCNN
+except ModuleNotFoundError:
+    MTCNN = None
 
 
 CLASS_NAMES = {
@@ -104,25 +115,51 @@ def extract_text_features(image_path: Path) -> tuple[np.ndarray, dict[str, Any]]
 
 
 def extract_face_features(image_path: Path, device: str) -> tuple[np.ndarray, dict[str, Any]]:
-    del image_path, device
-    return np.zeros(10, dtype=np.float32), {
-        "num_faces": 0,
-        "largest_face_area_ratio": 0.0,
-        "dominant_emotion": "unknown",
-        "status": (
-            "Face/emotion extraction is disabled in this inference path to avoid "
-            "TensorFlow/Keras dependencies. Zero face features were supplied to the FusionMLP."
-        ),
+    if MTCNN is None:
+        raise ModuleNotFoundError(
+            "facenet-pytorch is not installed in the active Python environment."
+        )
+
+    img = Image.open(image_path).convert("RGB")
+    img_np = np.array(img)
+    w, h = img.size
+    mtcnn = MTCNN(keep_all=True, device=device)
+
+    try:
+        boxes, _ = mtcnn.detect(img)
+    except Exception:
+        boxes = None
+
+    dominant_emotion = _dominant_emotion(img_np)
+    feature_row = {
+        "num_faces": int(0 if boxes is None else len(boxes)),
+        "largest_face_area_ratio": float(_largest_face_area_ratio(boxes, w, h)),
     }
+    for emotion in EMOTIONS:
+        feature_row[f"emotion_{emotion}"] = int(dominant_emotion == emotion)
+    feature_row["emotion_unknown"] = int(dominant_emotion is None)
+
+    feat_cols = ["num_faces", "largest_face_area_ratio"] + [
+        f"emotion_{emotion}" for emotion in EMOTIONS
+    ] + ["emotion_unknown"]
+    vector = pd.DataFrame([feature_row])[feat_cols].values.astype(np.float32).squeeze(0)
+
+    metadata = {
+        "num_faces": feature_row["num_faces"],
+        "largest_face_area_ratio": feature_row["largest_face_area_ratio"],
+        "dominant_emotion": dominant_emotion or "unknown",
+        "status": "Face/emotion features extracted from the uploaded image.",
+    }
+    return vector, metadata
 
 
 def predict_thumbnail_distribution(
     image_path: Path,
     subscriber_count: int,
     model_path: Path = MODELS_DIR / "fusion_mlp_shap.pt",
-    cnn_reference_path: Path = PROCESSED_DATA_DIR / "cnn_embeddings.npy",
-    text_reference_path: Path = PROCESSED_DATA_DIR / "text_embeddings.npy",
-    face_reference_path: Path = PROCESSED_DATA_DIR / "face_embeddings.npy",
+    cnn_reference_path: Path = PROCESSED_DATA_DIR / "merged_cnn_embeddings_resnet50.npy",
+    text_reference_path: Path = PROCESSED_DATA_DIR / "merged_text_embeddings.npy",
+    face_reference_path: Path = PROCESSED_DATA_DIR / "merged_face_embeddings.npy",
     device: str = "cpu",
 ) -> ThumbnailPrediction:
     if not image_path.exists():
@@ -190,8 +227,8 @@ def predict_thumbnail_distribution(
         note=(
             "Subscriber count is accepted by this interface, but the current FusionMLP "
             "was trained on thumbnail-derived CNN, OCR, and face/emotion features only. "
-            "This GUI currently computes CNN and OCR features on the fly and supplies "
-            "zeroed face features to avoid DeepFace/TensorFlow dependencies."
+            "This interface computes those features directly from the uploaded image "
+            "before passing them to the FusionMLP."
         ),
     )
 
@@ -393,17 +430,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cnn_reference_path",
         type=Path,
-        default=PROCESSED_DATA_DIR / "cnn_embeddings.npy",
+        default=PROCESSED_DATA_DIR / "merged_cnn_embeddings_resnet50.npy",
     )
     parser.add_argument(
         "--text_reference_path",
         type=Path,
-        default=PROCESSED_DATA_DIR / "text_embeddings.npy",
+        default=PROCESSED_DATA_DIR / "merged_text_embeddings.npy",
     )
     parser.add_argument(
         "--face_reference_path",
         type=Path,
-        default=PROCESSED_DATA_DIR / "face_embeddings.npy",
+        default=PROCESSED_DATA_DIR / "merged_face_embeddings.npy",
     )
     parser.add_argument(
         "--device",
