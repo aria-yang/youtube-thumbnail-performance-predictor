@@ -18,7 +18,6 @@ from thumbnail_performance.dataset import ThumbnailDataset, main as build_labele
 from thumbnail_performance.face_emotion_detection import EMOTIONS, extract_face_emotion_features
 from thumbnail_performance.modeling.fusion_mlp import FusionMLP
 from thumbnail_performance.ocr_features import build_ocr_feature_dataframe
-from thumbnail_performance.title_embeddings import build_title_embedding_array
 from training.train_fusion import train
 from utils.class_weights import compute_class_weights
 
@@ -201,24 +200,6 @@ def run_ocr_stage(
     print(f"Saved {output_path}")
 
 
-def run_title_stage(
-    csv_path: Path,
-    output_path: Path,
-    cache_path: Path,
-    model_name: str,
-    batch_size: int,
-    device: str,
-) -> None:
-    build_title_embedding_array(
-        csv_path=csv_path,
-        output_path=output_path,
-        cache_path=cache_path,
-        model_name=model_name,
-        batch_size=batch_size,
-        device=device,
-    )
-
-
 def run_face_stage(
     csv_path: Path,
     thumbnail_dirs: list[Path],
@@ -371,12 +352,6 @@ if __name__ == "__main__":
         help="Output path for OCR feature CSV.",
     )
     parser.add_argument(
-        "--title_cache_path",
-        type=Path,
-        default=PROCESSED_DATA_DIR / "merged_title_embedding_cache.csv",
-        help="Cache path for resumable title embeddings.",
-    )
-    parser.add_argument(
         "--seed_ocr_cache_paths",
         type=Path,
         nargs="*",
@@ -390,19 +365,7 @@ if __name__ == "__main__":
         "--text_output_path",
         type=Path,
         default=PROCESSED_DATA_DIR / "merged_text_embeddings.npy",
-        help="Output path for title/text embedding array.",
-    )
-    parser.add_argument(
-        "--title_model_name",
-        type=str,
-        default="all-MiniLM-L6-v2",
-        help="SentenceTransformer model name for title embeddings.",
-    )
-    parser.add_argument(
-        "--title_batch_size",
-        type=int,
-        default=64,
-        help="Batch size for title embedding generation.",
+        help="Output path for OCR/text feature array.",
     )
     parser.add_argument(
         "--face_output_path",
@@ -489,22 +452,12 @@ if __name__ == "__main__":
         device=args.device,
     )
 
-    print("Stage 3/5: Building title embeddings")
-    run_title_stage(
-        csv_path=args.labeled_csv_path,
-        output_path=args.text_output_path,
-        cache_path=args.title_cache_path,
-        model_name=args.title_model_name,
-        batch_size=args.title_batch_size,
-        device=args.device,
-    )
-
-    print("Stage 3b/5: Refreshing OCR feature cache")
+    print("Stage 3/5: Refreshing OCR feature cache")
     run_ocr_stage(
         csv_path=args.labeled_csv_path,
         thumbnail_dirs=args.thumbnail_dirs,
         ocr_csv_path=args.ocr_csv_path,
-        output_path=args.text_output_path.parent / "ocr_scalar_features_unused.npy",
+        output_path=args.text_output_path,
         backend=args.ocr_backend,
         seed_ocr_cache_paths=args.seed_ocr_cache_paths,
         ocr_use_gpu=ocr_use_gpu,
