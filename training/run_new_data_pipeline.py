@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader, random_split
+from tqdm import tqdm
 
 from thumbnail_performance.cnn_embeddings import EMBEDDING_DIM, _embed_image, build_embedding_model
 from thumbnail_performance.cnn_embeddings import resolve_thumbnail_path as resolve_cnn_path
@@ -48,13 +49,19 @@ def run_cnn_stage(
 
     missing_df = df.loc[~df["Id"].isin(cached.index)].copy()
     new_rows = []
+    print(f"CNN stage: {len(cached)} cached, {len(missing_df)} to process")
 
     if len(missing_df) > 0:
+        print("Loading ResNet-18 weights for CNN embeddings...")
         model = build_embedding_model(device=device)
     else:
         model = None
 
-    for _, row in missing_df.iterrows():
+    for _, row in tqdm(
+        missing_df.iterrows(),
+        total=len(missing_df),
+        desc="CNN embeddings",
+    ):
         vid = str(row["Id"])
         channel = str(row["Channel"])
         img_path = resolve_across_roots(thumbnail_dirs, channel, vid)
@@ -89,31 +96,51 @@ def run_cnn_stage(
     print(f"Saved {output_path}")
 
 
+def load_ocr_cache_sources(cache_paths: list[Path]) -> pd.DataFrame:
+    frames = []
+    seen = set()
+
+    for cache_path in cache_paths:
+        if cache_path in seen or not cache_path.exists():
+            continue
+        seen.add(cache_path)
+        df = pd.read_csv(cache_path, index_col="thumbnail_id")
+        df.index = df.index.astype(str)
+        frames.append(df)
+        print(f"Loaded OCR cache with {len(df)} rows from {cache_path}")
+
+    if not frames:
+        return pd.DataFrame()
+
+    cached = pd.concat(frames)
+    cached = cached[~cached.index.duplicated(keep="first")]
+    return cached
+
+
 def run_ocr_stage(
     csv_path: Path,
     thumbnail_dirs: list[Path],
     ocr_csv_path: Path,
     output_path: Path,
     backend: str,
+    seed_ocr_cache_paths: list[Path],
 ) -> None:
     labeled = pd.read_csv(csv_path)
     labeled["Id"] = labeled["Id"].astype(str)
     valid_ids = set(labeled["Id"])
 
-    if ocr_csv_path.exists():
-        cached = pd.read_csv(ocr_csv_path, index_col="thumbnail_id")
-        cached.index = cached.index.astype(str)
-        print(f"Loaded OCR cache with {len(cached)} rows from {ocr_csv_path}")
-    else:
-        cached = pd.DataFrame()
+    cache_sources = [ocr_csv_path] + seed_ocr_cache_paths
+    cached = load_ocr_cache_sources(cache_sources)
 
     missing_ids = valid_ids - set(cached.index)
+    print(f"OCR stage: {len(cached)} cached, {len(missing_ids)} to process")
     if missing_ids:
         new_frames = []
         remaining_ids = set(missing_ids)
         for thumbnail_dir in thumbnail_dirs:
             if not remaining_ids:
                 break
+            print(f"OCR scanning root: {thumbnail_dir}")
             try:
                 new_df = build_ocr_feature_dataframe(
                     thumbnail_dir=str(thumbnail_dir),
@@ -162,6 +189,9 @@ def run_face_stage(
         cached.index = cached.index.astype(str)
         frames.append(cached)
         remaining_ids -= set(cached.index)
+        print(f"Loaded face cache with {len(cached)} rows from {cache_path}")
+
+    print(f"Face stage: {len(df) - len(remaining_ids)} cached, {len(remaining_ids)} to process")
 
     for thumbnail_dir in thumbnail_dirs:
         if not remaining_ids:
@@ -281,6 +311,16 @@ if __name__ == "__main__":
         help="Output path for OCR feature CSV.",
     )
     parser.add_argument(
+        "--seed_ocr_cache_paths",
+        type=Path,
+        nargs="*",
+        default=[
+            PROCESSED_DATA_DIR / "ocr_features.csv",
+            PROCESSED_DATA_DIR / "new_ocr_features.csv",
+        ],
+        help="Existing OCR cache CSVs to reuse before recomputing missing IDs.",
+    )
+    parser.add_argument(
         "--text_output_path",
         type=Path,
         default=PROCESSED_DATA_DIR / "merged_text_embeddings.npy",
@@ -373,6 +413,7 @@ if __name__ == "__main__":
         ocr_csv_path=args.ocr_csv_path,
         output_path=args.text_output_path,
         backend=args.ocr_backend,
+        seed_ocr_cache_paths=args.seed_ocr_cache_paths,
     )
 
     print("Stage 4/5: Extracting face/emotion features")
