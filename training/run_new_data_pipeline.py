@@ -21,9 +21,17 @@ from training.train_fusion import train
 from utils.class_weights import compute_class_weights
 
 
+def resolve_across_roots(thumbnail_dirs: list[Path], channel: str, video_id: str) -> Path | None:
+    for root in thumbnail_dirs:
+        img_path = resolve_cnn_path(root, channel, video_id)
+        if img_path is not None:
+            return img_path
+    return None
+
+
 def run_cnn_stage(
     csv_path: Path,
-    thumbnail_dir: Path,
+    thumbnail_dirs: list[Path],
     output_path: Path,
     cache_path: Path,
     device: str,
@@ -49,7 +57,7 @@ def run_cnn_stage(
     for _, row in missing_df.iterrows():
         vid = str(row["Id"])
         channel = str(row["Channel"])
-        img_path = resolve_cnn_path(thumbnail_dir, channel, vid)
+        img_path = resolve_across_roots(thumbnail_dirs, channel, vid)
         embedding = np.zeros(EMBEDDING_DIM, dtype=np.float32)
         missing = 1
 
@@ -83,7 +91,7 @@ def run_cnn_stage(
 
 def run_ocr_stage(
     csv_path: Path,
-    thumbnail_dir: Path,
+    thumbnail_dirs: list[Path],
     ocr_csv_path: Path,
     output_path: Path,
     backend: str,
@@ -101,12 +109,27 @@ def run_ocr_stage(
 
     missing_ids = valid_ids - set(cached.index)
     if missing_ids:
-        new_df = build_ocr_feature_dataframe(
-            thumbnail_dir=str(thumbnail_dir),
-            valid_ids=missing_ids,
-            backend=backend,
-        )
-        cached = pd.concat([cached, new_df]) if not cached.empty else new_df
+        new_frames = []
+        remaining_ids = set(missing_ids)
+        for thumbnail_dir in thumbnail_dirs:
+            if not remaining_ids:
+                break
+            try:
+                new_df = build_ocr_feature_dataframe(
+                    thumbnail_dir=str(thumbnail_dir),
+                    valid_ids=remaining_ids,
+                    backend=backend,
+                )
+            except FileNotFoundError:
+                continue
+            if not new_df.empty:
+                new_frames.append(new_df)
+                remaining_ids -= set(new_df.index.astype(str))
+
+        if new_frames:
+            new_df = pd.concat(new_frames)
+            new_df = new_df[~new_df.index.duplicated(keep="first")]
+            cached = pd.concat([cached, new_df]) if not cached.empty else new_df
 
     ocr_csv_path.parent.mkdir(parents=True, exist_ok=True)
     cached.to_csv(ocr_csv_path)
@@ -125,24 +148,54 @@ def run_ocr_stage(
 
 def run_face_stage(
     csv_path: Path,
-    thumbnail_dir: Path,
+    thumbnail_dirs: list[Path],
     output_path: Path,
     cache_path: Path,
     device: str,
 ) -> None:
     df = pd.read_csv(csv_path)
-    feats = extract_face_emotion_features(
-        df,
-        thumbnail_dir=thumbnail_dir,
-        cache_path=cache_path,
-        device=device,
-    )
+    frames = []
+    remaining_ids = set(df["Id"].astype(str))
+
+    if cache_path.exists():
+        cached = pd.read_csv(cache_path, index_col="Id")
+        cached.index = cached.index.astype(str)
+        frames.append(cached)
+        remaining_ids -= set(cached.index)
+
+    for thumbnail_dir in thumbnail_dirs:
+        if not remaining_ids:
+            break
+        root_ids = []
+        for _, row in df.loc[df["Id"].astype(str).isin(remaining_ids)].iterrows():
+            if resolve_cnn_path(thumbnail_dir, str(row["Channel"]), str(row["Id"])) is not None:
+                root_ids.append(str(row["Id"]))
+        if not root_ids:
+            continue
+        subset_df = df.loc[df["Id"].astype(str).isin(root_ids)].copy()
+        feats = extract_face_emotion_features(
+            subset_df,
+            thumbnail_dir=thumbnail_dir,
+            cache_path=None,
+            device=device,
+        )
+        if not feats.empty:
+            feats.index = feats.index.astype(str)
+            found_ids = set(feats.index)
+            remaining_ids -= found_ids
+            frames.append(feats)
+
+    feats = pd.concat(frames) if frames else pd.DataFrame()
+    feats = feats[~feats.index.duplicated(keep="first")]
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    feats.to_csv(cache_path)
 
     feat_cols = ["num_faces", "largest_face_area_ratio"] + [
         f"emotion_{emotion}" for emotion in EMOTIONS
     ] + ["emotion_unknown"]
 
     arr = feats.reindex(df["Id"].astype(str))[feat_cols].values.astype(np.float32)
+    arr = np.nan_to_num(arr, nan=0.0)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     np.save(output_path, arr)
     print(f"Saved {output_path}")
@@ -200,10 +253,14 @@ if __name__ == "__main__":
         help="Output path for labeled CSV.",
     )
     parser.add_argument(
-        "--thumbnail_dir",
+        "--thumbnail_dirs",
         type=Path,
-        default=RAW_DATA_DIR.parent / "thumbnails" / "images",
-        help="Root thumbnail directory with channel subfolders.",
+        nargs="+",
+        default=[
+            RAW_DATA_DIR.parent / "thumbnails" / "images",
+            RAW_DATA_DIR.parent / "thumbnails" / "new_images",
+        ],
+        help="One or more root thumbnail directories with channel subfolders.",
     )
     parser.add_argument(
         "--cnn_output_path",
@@ -303,7 +360,7 @@ if __name__ == "__main__":
     print("Stage 2/5: Extracting CNN embeddings")
     run_cnn_stage(
         csv_path=args.labeled_csv_path,
-        thumbnail_dir=args.thumbnail_dir,
+        thumbnail_dirs=args.thumbnail_dirs,
         output_path=args.cnn_output_path,
         cache_path=args.cnn_cache_path,
         device=args.device,
@@ -312,7 +369,7 @@ if __name__ == "__main__":
     print("Stage 3/5: Extracting OCR features")
     run_ocr_stage(
         csv_path=args.labeled_csv_path,
-        thumbnail_dir=args.thumbnail_dir,
+        thumbnail_dirs=args.thumbnail_dirs,
         ocr_csv_path=args.ocr_csv_path,
         output_path=args.text_output_path,
         backend=args.ocr_backend,
@@ -321,7 +378,7 @@ if __name__ == "__main__":
     print("Stage 4/5: Extracting face/emotion features")
     run_face_stage(
         csv_path=args.labeled_csv_path,
-        thumbnail_dir=args.thumbnail_dir,
+        thumbnail_dirs=args.thumbnail_dirs,
         output_path=args.face_output_path,
         cache_path=args.face_cache_path,
         device=args.device,
