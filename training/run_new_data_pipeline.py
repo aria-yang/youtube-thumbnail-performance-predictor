@@ -12,7 +12,12 @@ import torch
 from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 
-from thumbnail_performance.cnn_embeddings import EMBEDDING_DIM, _embed_image, build_embedding_model
+from thumbnail_performance.cnn_embeddings import (
+    BACKBONE_NAME,
+    EMBEDDING_DIM,
+    _embed_image,
+    build_embedding_model,
+)
 from thumbnail_performance.cnn_embeddings import resolve_thumbnail_path as resolve_cnn_path
 from thumbnail_performance.config import PROCESSED_DATA_DIR, RAW_DATA_DIR
 from thumbnail_performance.dataset import ThumbnailDataset, main as build_labeled_dataset
@@ -108,7 +113,7 @@ def run_cnn_stage(
     print(f"CNN stage: {len(cached)} cached, {len(missing_df)} to process")
 
     if len(missing_df) > 0:
-        print("Loading ResNet-18 weights for CNN embeddings...")
+        print(f"Loading {BACKBONE_NAME} weights for CNN embeddings...")
         model = build_embedding_model(device=device)
     else:
         model = None
@@ -370,13 +375,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--cnn_output_path",
         type=Path,
-        default=PROCESSED_DATA_DIR / "merged_cnn_embeddings.npy",
+        default=PROCESSED_DATA_DIR / f"merged_cnn_embeddings_{BACKBONE_NAME}.npy",
         help="Output path for CNN embeddings.",
     )
     parser.add_argument(
         "--cnn_cache_path",
         type=Path,
-        default=PROCESSED_DATA_DIR / "merged_cnn_cache.csv",
+        default=PROCESSED_DATA_DIR / f"merged_cnn_cache_{BACKBONE_NAME}.csv",
         help="Cache path for resumable CNN extraction.",
     )
     parser.add_argument(
@@ -479,6 +484,15 @@ if __name__ == "__main__":
     # Always pull the latest CSV artifacts from Drive, even if local copies exist.
     restore_artifacts(
         [
+            args.raw_csv_path,
+        ],
+        artifact_root,
+        overwrite=True,
+    )
+
+    # Always pull the latest CSV artifacts from Drive, even if local copies exist.
+    restore_artifacts(
+        [
             args.labeled_csv_path,
             args.cnn_cache_path,
             args.ocr_csv_path,
@@ -506,6 +520,7 @@ if __name__ == "__main__":
         test_size=args.dataset_test_size,
         random_state=args.dataset_random_state,
     )
+    sync_artifacts_to_root([args.labeled_csv_path], artifact_root)
 
     print("Stage 2/5: Extracting CNN embeddings")
     run_cnn_stage(
@@ -515,6 +530,7 @@ if __name__ == "__main__":
         cache_path=args.cnn_cache_path,
         device=args.device,
     )
+    sync_artifacts_to_root([args.cnn_output_path, args.cnn_cache_path], artifact_root)
 
     print("Stage 3/5: Refreshing OCR feature cache")
     run_ocr_stage(
@@ -526,6 +542,7 @@ if __name__ == "__main__":
         seed_ocr_cache_paths=args.seed_ocr_cache_paths,
         ocr_use_gpu=ocr_use_gpu,
     )
+    sync_artifacts_to_root([args.ocr_csv_path, args.text_output_path], artifact_root)
 
     print("Stage 4/5: Extracting face/emotion features")
     run_face_stage(
@@ -535,6 +552,7 @@ if __name__ == "__main__":
         cache_path=args.face_cache_path,
         device=args.device,
     )
+    sync_artifacts_to_root([args.face_output_path, args.face_cache_path], artifact_root)
 
     print("Stage 5/5: Training fusion model")
     run_training_stage(
