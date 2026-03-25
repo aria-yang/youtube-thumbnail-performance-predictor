@@ -12,6 +12,7 @@ from PIL import Image
 from torchvision import models, transforms
 
 
+BACKBONE_NAME = "resnet50"
 EMBEDDING_DIM = 2048
 
 TRANSFORM = transforms.Compose(
