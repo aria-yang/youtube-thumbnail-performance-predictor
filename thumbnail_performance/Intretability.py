@@ -8,8 +8,9 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 import numpy as np
-import pandas as pd
 from PIL import Image, ImageTk
+from torchvision import models
+import torch.nn as nn
 
 try:
     import torch
@@ -21,12 +22,8 @@ except ModuleNotFoundError as exc:
     ) from exc
 
 from thumbnail_performance.cnn_embeddings import _embed_image, build_embedding_model
+from thumbnail_performance.cnn_embeddings import TRANSFORM
 from thumbnail_performance.config import MODELS_DIR, PROCESSED_DATA_DIR
-from thumbnail_performance.face_emotion_detection import (
-    EMOTIONS,
-    _dominant_emotion,
-    _largest_face_area_ratio,
-)
 from thumbnail_performance.modeling.fusion_mlp import FusionMLP
 from thumbnail_performance.ocr_features import extract_ocr_features
 
@@ -36,6 +33,9 @@ except ModuleNotFoundError:
     MTCNN = None
 
 
+EMOTIONS = ["angry", "disgust", "fear", "happy", "sad", "surprise", "neutral"]
+
+
 CLASS_NAMES = {
     0: "Very Low",
     1: "Low",
@@ -43,6 +43,13 @@ CLASS_NAMES = {
     3: "High",
     4: "Very High",
 }
+
+
+def resolve_reference_path(*candidates: Path) -> Path:
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
 
 
 @dataclass
@@ -92,8 +99,33 @@ def load_fusion_model(
     return model.to(device)
 
 
-def extract_cnn_features(image_path: Path, device: str) -> np.ndarray:
-    embedding_model = build_embedding_model(device=device)
+def _largest_face_area_ratio(boxes: np.ndarray | None, w: int, h: int) -> float:
+    if boxes is None or len(boxes) == 0:
+        return 0.0
+    areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+    img_area = float(w * h) if w > 0 and h > 0 else 0.0
+    return float(np.max(areas)) / img_area if img_area > 0 else 0.0
+
+
+def build_cnn_model_for_dim(cnn_dim: int, device: str) -> nn.Module:
+    if cnn_dim == 2048:
+        return build_embedding_model(device=device)
+    if cnn_dim == 512:
+        weights = models.ResNet18_Weights.IMAGENET1K_V1
+        model = models.resnet18(weights=weights)
+        model.fc = nn.Identity()
+        for param in model.parameters():
+            param.requires_grad = False
+        model.eval()
+        return model.to(device)
+    raise ValueError(
+        f"Unsupported CNN feature dimension {cnn_dim}. Expected a ResNet-18 "
+        "checkpoint (512) or ResNet-50 checkpoint (2048)."
+    )
+
+
+def extract_cnn_features(image_path: Path, device: str, cnn_dim: int) -> np.ndarray:
+    embedding_model = build_cnn_model_for_dim(cnn_dim=cnn_dim, device=device)
     embedding = _embed_image(image_path, model=embedding_model, device=device)
     if embedding is None:
         raise RuntimeError(f"Could not extract CNN features from {image_path}")
@@ -121,7 +153,6 @@ def extract_face_features(image_path: Path, device: str) -> tuple[np.ndarray, di
         )
 
     img = Image.open(image_path).convert("RGB")
-    img_np = np.array(img)
     w, h = img.size
     mtcnn = MTCNN(keep_all=True, device=device)
 
@@ -130,25 +161,22 @@ def extract_face_features(image_path: Path, device: str) -> tuple[np.ndarray, di
     except Exception:
         boxes = None
 
-    dominant_emotion = _dominant_emotion(img_np)
-    feature_row = {
-        "num_faces": int(0 if boxes is None else len(boxes)),
-        "largest_face_area_ratio": float(_largest_face_area_ratio(boxes, w, h)),
-    }
-    for emotion in EMOTIONS:
-        feature_row[f"emotion_{emotion}"] = int(dominant_emotion == emotion)
-    feature_row["emotion_unknown"] = int(dominant_emotion is None)
-
     feat_cols = ["num_faces", "largest_face_area_ratio"] + [
         f"emotion_{emotion}" for emotion in EMOTIONS
     ] + ["emotion_unknown"]
-    vector = pd.DataFrame([feature_row])[feat_cols].values.astype(np.float32).squeeze(0)
+    vector = np.zeros(len(feat_cols), dtype=np.float32)
+    vector[0] = float(0 if boxes is None else len(boxes))
+    vector[1] = float(_largest_face_area_ratio(boxes, w, h))
+    vector[-1] = 1.0
 
     metadata = {
-        "num_faces": feature_row["num_faces"],
-        "largest_face_area_ratio": feature_row["largest_face_area_ratio"],
-        "dominant_emotion": dominant_emotion or "unknown",
-        "status": "Face/emotion features extracted from the uploaded image.",
+        "num_faces": int(vector[0]),
+        "largest_face_area_ratio": float(vector[1]),
+        "dominant_emotion": "unknown",
+        "status": (
+            "Face geometry features were extracted from the uploaded image without "
+            "using Keras/DeepFace. Emotion fields were set to unknown."
+        ),
     }
     return vector, metadata
 
@@ -157,9 +185,18 @@ def predict_thumbnail_distribution(
     image_path: Path,
     subscriber_count: int,
     model_path: Path = MODELS_DIR / "fusion_mlp_shap.pt",
-    cnn_reference_path: Path = PROCESSED_DATA_DIR / "merged_cnn_embeddings_resnet50.npy",
-    text_reference_path: Path = PROCESSED_DATA_DIR / "merged_text_embeddings.npy",
-    face_reference_path: Path = PROCESSED_DATA_DIR / "merged_face_embeddings.npy",
+    cnn_reference_path: Path = resolve_reference_path(
+        PROCESSED_DATA_DIR / "merged_cnn_embeddings_resnet50.npy",
+        PROCESSED_DATA_DIR / "cnn_embeddings.npy",
+    ),
+    text_reference_path: Path = resolve_reference_path(
+        PROCESSED_DATA_DIR / "merged_text_embeddings.npy",
+        PROCESSED_DATA_DIR / "text_embeddings.npy",
+    ),
+    face_reference_path: Path = resolve_reference_path(
+        PROCESSED_DATA_DIR / "merged_face_embeddings.npy",
+        PROCESSED_DATA_DIR / "face_embeddings.npy",
+    ),
     device: str = "cpu",
 ) -> ThumbnailPrediction:
     if not image_path.exists():
@@ -173,7 +210,11 @@ def predict_thumbnail_distribution(
         face_reference_path=face_reference_path,
     )
 
-    cnn_features = extract_cnn_features(image_path=image_path, device=device)
+    cnn_features = extract_cnn_features(
+        image_path=image_path,
+        device=device,
+        cnn_dim=cnn_dim,
+    )
     text_features, text_metadata = extract_text_features(image_path=image_path)
     face_features, face_metadata = extract_face_features(
         image_path=image_path,
@@ -430,17 +471,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cnn_reference_path",
         type=Path,
-        default=PROCESSED_DATA_DIR / "merged_cnn_embeddings_resnet50.npy",
+        default=resolve_reference_path(
+            PROCESSED_DATA_DIR / "merged_cnn_embeddings_resnet50.npy",
+            PROCESSED_DATA_DIR / "cnn_embeddings.npy",
+        ),
     )
     parser.add_argument(
         "--text_reference_path",
         type=Path,
-        default=PROCESSED_DATA_DIR / "merged_text_embeddings.npy",
+        default=resolve_reference_path(
+            PROCESSED_DATA_DIR / "merged_text_embeddings.npy",
+            PROCESSED_DATA_DIR / "text_embeddings.npy",
+        ),
     )
     parser.add_argument(
         "--face_reference_path",
         type=Path,
-        default=PROCESSED_DATA_DIR / "merged_face_embeddings.npy",
+        default=resolve_reference_path(
+            PROCESSED_DATA_DIR / "merged_face_embeddings.npy",
+            PROCESSED_DATA_DIR / "face_embeddings.npy",
+        ),
     )
     parser.add_argument(
         "--device",

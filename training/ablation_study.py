@@ -1,3 +1,4 @@
+import argparse
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -16,6 +17,23 @@ from thumbnail_performance.modeling.fusion_mlp import FusionMLP
 from training.train_fusion import train, compute_auroc
 
 
+DEFAULT_CSV_PATH = PROCESSED_DATA_DIR / "merged_labeled_data.csv"
+DEFAULT_TEXT_PATH = PROCESSED_DATA_DIR / "merged_text_embeddings.npy"
+DEFAULT_FACE_PATH = PROCESSED_DATA_DIR / "merged_face_embeddings.npy"
+
+
+def resolve_cnn_path() -> Path:
+   """Prefer the explicit ResNet50 artifact name, then fall back to the merged CNN file."""
+   candidates = [
+       PROCESSED_DATA_DIR / "merged_cnn_embeddings_resnet50.npy",
+       PROCESSED_DATA_DIR / "merged_cnn_embeddings.npy",
+   ]
+   for path in candidates:
+       if path.exists():
+           return path
+   return candidates[0]
+
+
 def set_seed(seed: int):
    """Ensures absolute reproducibility across PyTorch, NumPy, and Python."""
    np.random.seed(seed)
@@ -31,15 +49,23 @@ def compute_class_weights(labels_tensor: torch.Tensor, num_classes: int = 5) -> 
    return weights / weights.sum() * num_classes
 
 
-def get_real_dataloaders(batch_size=64):
-   """Loads your team's real, pre-extracted multi-modal features."""
+def get_real_dataloaders(
+   batch_size: int = 64,
+   csv_path: Path = DEFAULT_CSV_PATH,
+   cnn_path: Path | None = None,
+   text_path: Path = DEFAULT_TEXT_PATH,
+   face_path: Path = DEFAULT_FACE_PATH,
+):
+   """Loads the pre-extracted multi-modal features used by the fusion model."""
    logger.info("Loading real ThumbnailDataset features from disk...")
+   if cnn_path is None:
+       cnn_path = resolve_cnn_path()
   
    dataset = ThumbnailDataset(
-       csv_path=PROCESSED_DATA_DIR / "labeled_data.csv",
-       cnn_path=PROCESSED_DATA_DIR / "cnn_embeddings.npy",
-       text_path=PROCESSED_DATA_DIR / "text_embeddings.npy",
-       face_path=PROCESSED_DATA_DIR / "face_embeddings.npy"
+       csv_path=csv_path,
+       cnn_path=cnn_path,
+       text_path=text_path,
+       face_path=face_path
    )
   
    all_labels = dataset.labels
@@ -75,12 +101,24 @@ class AblationWrapper(nn.Module):
        return self.base_model(cnn_feat, text_feat, face_feat)
 
 
-def run_ablation_experiment():
+def run_ablation_experiment(
+   batch_size: int = 64,
+   csv_path: Path = DEFAULT_CSV_PATH,
+   cnn_path: Path | None = None,
+   text_path: Path = DEFAULT_TEXT_PATH,
+   face_path: Path = DEFAULT_FACE_PATH,
+):
    seeds = [42, 43, 44, 45, 46]
    device = "cuda" if torch.cuda.is_available() else "cpu"
   
    # Load Data
-   train_loader, val_loader, class_weights = get_real_dataloaders()
+   train_loader, val_loader, class_weights = get_real_dataloaders(
+       batch_size=batch_size,
+       csv_path=csv_path,
+       cnn_path=cnn_path,
+       text_path=text_path,
+       face_path=face_path,
+   )
    class_weights = class_weights.to(device)
 
 
@@ -180,5 +218,52 @@ def generate_ablation_outputs(df_results, output_dir="outputs"):
 
 
 if __name__ == "__main__":
-   df = run_ablation_experiment()
-   generate_ablation_outputs(df)
+   parser = argparse.ArgumentParser(
+       description="Run the multimodal ablation study with the merged ResNet50-labeled dataset."
+   )
+   parser.add_argument(
+       "--csv_path",
+       type=Path,
+       default=DEFAULT_CSV_PATH,
+       help="Path to the labeled CSV containing engagement_label.",
+   )
+   parser.add_argument(
+       "--cnn_path",
+       type=Path,
+       default=None,
+       help="Path to CNN embeddings. Defaults to merged ResNet50 embeddings when present.",
+   )
+   parser.add_argument(
+       "--text_path",
+       type=Path,
+       default=DEFAULT_TEXT_PATH,
+       help="Path to text embeddings.",
+   )
+   parser.add_argument(
+       "--face_path",
+       type=Path,
+       default=DEFAULT_FACE_PATH,
+       help="Path to face embeddings.",
+   )
+   parser.add_argument(
+       "--batch_size",
+       type=int,
+       default=64,
+       help="Batch size for the ablation data loaders.",
+   )
+   parser.add_argument(
+       "--output_dir",
+       type=str,
+       default="outputs",
+       help="Directory where the ablation table and plot will be saved.",
+   )
+   args = parser.parse_args()
+
+   df = run_ablation_experiment(
+       batch_size=args.batch_size,
+       csv_path=args.csv_path,
+       cnn_path=args.cnn_path,
+       text_path=args.text_path,
+       face_path=args.face_path,
+   )
+   generate_ablation_outputs(df, output_dir=args.output_dir)
