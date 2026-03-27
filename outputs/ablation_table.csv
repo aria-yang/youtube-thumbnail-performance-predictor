@@ -1,5 +1,5 @@
 Model,AUROC (Mean ± Std)
-CNN + Face,0.6498 ± 0.0044
-CNN-only,0.6512 ± 0.0057
-CNN + Text + Face,0.6566 ± 0.0067
-CNN + Text,0.6570 ± 0.0082
+CNN-only,0.7259 ± 0.0069
+CNN + Text,0.7288 ± 0.0052
+CNN + Text + Face,0.8091 ± 0.0049
+CNN + Face,0.8093 ± 0.0061
