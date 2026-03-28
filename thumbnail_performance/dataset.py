@@ -129,12 +129,38 @@ class ThumbnailDataset(Dataset):
         text_embeddings.npy  shape (N, 768)
         face_embeddings.npy  shape (N, 128)
     """
-    def __init__(self, csv_path, cnn_path, text_path, face_path):
+    def __init__(
+        self,
+        csv_path,
+        cnn_path,
+        text_path,
+        face_path,
+        target_column: str = "engagement_label",
+        target_transform: str | None = None,
+    ):
         import numpy as np
         df = read_csv_with_fallback(csv_path)
-        self.labels = torch.tensor(
-            df["engagement_label"].astype(int).values, dtype=torch.long
-        )
+        if target_column not in df.columns:
+            raise KeyError(
+                f"Target column '{target_column}' was not found in {csv_path}. "
+                f"Available columns include: {list(df.columns)}"
+            )
+
+        target_values = df[target_column].astype(float).to_numpy()
+        if target_transform == "log1p":
+            if np.any(target_values < 0):
+                raise ValueError(
+                    f"Cannot apply log1p to negative values in target column '{target_column}'."
+                )
+            target_values = np.log1p(target_values)
+        elif target_transform not in (None, "none"):
+            raise ValueError(
+                f"Unsupported target_transform '{target_transform}'. "
+                "Expected one of: None, 'none', 'log1p'."
+            )
+
+        target_dtype = torch.long if target_column == "engagement_label" else torch.float32
+        self.labels = torch.tensor(target_values, dtype=target_dtype)
         self.cnn  = torch.tensor(np.load(cnn_path),  dtype=torch.float32)
         self.text = torch.tensor(np.load(text_path), dtype=torch.float32)
         self.face = torch.tensor(np.load(face_path), dtype=torch.float32)
