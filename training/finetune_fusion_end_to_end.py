@@ -56,6 +56,38 @@ def set_seed(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
+def build_warmup_cosine_scheduler(
+    optimizer: optim.Optimizer,
+    total_epochs: int,
+    max_lr: float,
+    warmup_epochs: int = 1,
+    min_lr_ratio: float = 0.05,
+):
+    total_epochs = max(1, total_epochs)
+    warmup_epochs = min(max(1, warmup_epochs), total_epochs)
+    cosine_epochs = max(1, total_epochs - warmup_epochs)
+
+    if total_epochs == 1:
+        return optim.lr_scheduler.ConstantLR(optimizer, factor=1.0, total_iters=1)
+
+    warmup = optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=0.1,
+        end_factor=1.0,
+        total_iters=warmup_epochs,
+    )
+    cosine = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=cosine_epochs,
+        eta_min=max_lr * min_lr_ratio,
+    )
+    return optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup, cosine],
+        milestones=[warmup_epochs],
+    )
+
+
 def build_thumbnail_index(thumbnail_dirs: list[Path]) -> dict[str, Path]:
     index: dict[str, Path] = {}
     for root in thumbnail_dirs:
@@ -175,7 +207,34 @@ class EndToEndFusionModel(nn.Module):
 
         self.backbone = backbone
         self.cnn_dim = cnn_dim
-        self.input_dim = cnn_dim + text_dim + face_dim + 1
+        cnn_proj_dim = min(hidden1, 512)
+        aux_proj_dim = max(hidden2 // 2, 32)
+        missing_proj_dim = max(aux_proj_dim // 2, 8)
+
+        self.cnn_projector = nn.Sequential(
+            nn.Linear(cnn_dim, cnn_proj_dim),
+            nn.BatchNorm1d(cnn_proj_dim),
+            nn.ReLU(),
+            nn.Dropout(p=dropout_p),
+        )
+        self.text_projector = nn.Sequential(
+            nn.Linear(text_dim, aux_proj_dim),
+            nn.BatchNorm1d(aux_proj_dim),
+            nn.ReLU(),
+            nn.Dropout(p=dropout_p),
+        )
+        self.face_projector = nn.Sequential(
+            nn.Linear(face_dim, aux_proj_dim),
+            nn.BatchNorm1d(aux_proj_dim),
+            nn.ReLU(),
+            nn.Dropout(p=dropout_p),
+        )
+        self.missing_projector = nn.Sequential(
+            nn.Linear(1, missing_proj_dim),
+            nn.ReLU(),
+        )
+
+        self.input_dim = cnn_proj_dim + aux_proj_dim + aux_proj_dim + missing_proj_dim
         self.classifier = nn.Sequential(
             nn.Linear(self.input_dim, hidden1),
             nn.BatchNorm1d(hidden1),
@@ -208,7 +267,11 @@ class EndToEndFusionModel(nn.Module):
         image_missing: torch.Tensor,
     ) -> torch.Tensor:
         cnn_feat = self.backbone(images)
-        fused = torch.cat([cnn_feat, text_feat, face_feat, image_missing.unsqueeze(1)], dim=1)
+        cnn_feat = self.cnn_projector(cnn_feat)
+        text_feat = self.text_projector(text_feat)
+        face_feat = self.face_projector(face_feat)
+        missing_feat = self.missing_projector(image_missing.unsqueeze(1))
+        fused = torch.cat([cnn_feat, text_feat, face_feat, missing_feat], dim=1)
         return self.classifier(fused)
 
 
@@ -293,12 +356,37 @@ def build_optimizer(
     backbone_lr: float,
     weight_decay: float,
 ) -> optim.Optimizer:
-    classifier_params = [p for p in model.classifier.parameters() if p.requires_grad]
+    head_params = [
+        param
+        for name, param in model.named_parameters()
+        if param.requires_grad and not name.startswith("backbone.")
+    ]
     backbone_params = [p for p in model.backbone.parameters() if p.requires_grad]
-    param_groups = [{"params": classifier_params, "lr": head_lr}]
+    param_groups = [{"params": head_params, "lr": head_lr}]
     if backbone_params:
         param_groups.append({"params": backbone_params, "lr": backbone_lr})
     return optim.AdamW(param_groups, weight_decay=weight_decay)
+
+
+def build_stage_optimizer_and_scheduler(
+    model: EndToEndFusionModel,
+    head_lr: float,
+    backbone_lr: float,
+    weight_decay: float,
+    remaining_epochs: int,
+) -> tuple[optim.Optimizer, optim.lr_scheduler.LRScheduler]:
+    optimizer = build_optimizer(
+        model,
+        head_lr=head_lr,
+        backbone_lr=backbone_lr,
+        weight_decay=weight_decay,
+    )
+    scheduler = build_warmup_cosine_scheduler(
+        optimizer,
+        total_epochs=remaining_epochs,
+        max_lr=max(head_lr, backbone_lr),
+    )
+    return optimizer, scheduler
 
 
 def save_history_csv(history: list[dict[str, float]], path: Path) -> None:
@@ -426,13 +514,13 @@ def main():
     ).to(args.device)
 
     model.freeze_backbone()
-    optimizer = build_optimizer(
+    optimizer, scheduler = build_stage_optimizer_and_scheduler(
         model,
         head_lr=args.head_lr,
         backbone_lr=args.backbone_lr,
         weight_decay=args.weight_decay,
+        remaining_epochs=args.num_epochs,
     )
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", patience=2, factor=0.5)
 
     best_val_auroc = -float("inf")
     best_state = None
@@ -441,26 +529,28 @@ def main():
     for epoch in range(1, args.num_epochs + 1):
         if epoch == args.freeze_epochs + 1:
             model.unfreeze_layer4()
-            optimizer = build_optimizer(
+            optimizer, scheduler = build_stage_optimizer_and_scheduler(
                 model,
                 head_lr=args.head_lr,
                 backbone_lr=args.backbone_lr,
                 weight_decay=args.weight_decay,
+                remaining_epochs=args.num_epochs - epoch + 1,
             )
             print("Unfroze ResNet-50 layer4.")
         if epoch == args.unfreeze_all_epoch:
             model.unfreeze_all()
-            optimizer = build_optimizer(
+            optimizer, scheduler = build_stage_optimizer_and_scheduler(
                 model,
                 head_lr=args.head_lr,
                 backbone_lr=args.backbone_lr,
                 weight_decay=args.weight_decay,
+                remaining_epochs=args.num_epochs - epoch + 1,
             )
             print("Unfroze all ResNet-50 layers.")
 
         train_loss = train_one_epoch(model, train_loader, optimizer, criterion, args.device)
         val_metrics = compute_metrics(model, val_loader, args.device)
-        scheduler.step(val_metrics["macro_auroc"])
+        scheduler.step()
 
         row = {
             "epoch": epoch,

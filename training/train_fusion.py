@@ -11,7 +11,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import classification_report, confusion_matrix, f1_score, roc_auc_score
 from sklearn.preprocessing import label_binarize
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
@@ -30,9 +30,48 @@ from thumbnail_performance.dataset import (
     read_csv_with_fallback,
 )
 from thumbnail_performance.face_emotion_detection import EMOTIONS, extract_face_emotion_features
-from thumbnail_performance.modeling.fusion_mlp import EarlyStopping, FusionMLP
+from thumbnail_performance.modeling.fusion_mlp import EarlyStopping, EarlyStoppingMax, FusionMLP
 from thumbnail_performance.ocr_features import build_ocr_feature_dataframe
 from utils.class_weights import compute_class_weights
+
+
+def set_seed(seed: int) -> None:
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def build_warmup_cosine_scheduler(
+    optimizer: optim.Optimizer,
+    total_epochs: int,
+    base_lr: float,
+    warmup_epochs: int = 2,
+    min_lr_ratio: float = 0.05,
+):
+    total_epochs = max(1, total_epochs)
+    warmup_epochs = min(max(1, warmup_epochs), total_epochs)
+    cosine_epochs = max(1, total_epochs - warmup_epochs)
+
+    if total_epochs == 1:
+        return optim.lr_scheduler.ConstantLR(optimizer, factor=1.0, total_iters=1)
+
+    warmup = optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=0.1,
+        end_factor=1.0,
+        total_iters=warmup_epochs,
+    )
+    cosine = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=cosine_epochs,
+        eta_min=base_lr * min_lr_ratio,
+    )
+    return optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup, cosine],
+        milestones=[warmup_epochs],
+    )
 
 
 def train(
@@ -43,6 +82,9 @@ def train(
     lr: float = 1e-3,
     device: str = "cpu",
     class_weights: torch.Tensor = None,
+    early_stopping_patience: int = 12,
+    early_stopping_min_delta: float = 1e-4,
+    early_stopping_metric: str = "auroc",
 ) -> dict:
     model.to(device)
 
@@ -50,10 +92,27 @@ def train(
         weight=class_weights.to(device) if class_weights is not None else None
     )
     optimiser = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimiser, patience=3, factor=0.5)
-    stopper = EarlyStopping(patience=7, verbose=True)
+    scheduler = build_warmup_cosine_scheduler(
+        optimiser,
+        total_epochs=num_epochs,
+        base_lr=lr,
+    )
+    if early_stopping_metric == "loss":
+        stopper = EarlyStopping(
+            patience=early_stopping_patience,
+            min_delta=early_stopping_min_delta,
+            verbose=True,
+        )
+    else:
+        metric_name = "AUROC" if early_stopping_metric == "auroc" else "F1"
+        stopper = EarlyStoppingMax(
+            patience=early_stopping_patience,
+            min_delta=early_stopping_min_delta,
+            verbose=True,
+            metric_name=metric_name,
+        )
 
-    history = {"train_loss": [], "val_loss": [], "val_auroc": []}
+    history = {"train_loss": [], "val_loss": [], "val_auroc": [], "val_f1": []}
 
     for epoch in range(1, num_epochs + 1):
         model.train()
@@ -80,20 +139,29 @@ def train(
         val_loss /= len(val_loader.dataset)
 
         val_auroc = compute_auroc(model, val_loader, device=device)
-        scheduler.step(val_loss)
+        val_f1 = compute_macro_f1(model, val_loader, device=device)
+        scheduler.step()
 
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
         history["val_auroc"].append(val_auroc)
+        history["val_f1"].append(val_f1)
 
         print(
             f"Epoch {epoch:03d} | "
             f"Train Loss: {train_loss:.4f} | "
             f"Val Loss: {val_loss:.4f} | "
-            f"Val AUROC: {val_auroc:.4f}"
+            f"Val AUROC: {val_auroc:.4f} | "
+            f"Val F1: {val_f1:.4f}"
         )
 
-        if stopper.step(val_loss, model):
+        if early_stopping_metric == "loss":
+            monitored_value = val_loss
+        elif early_stopping_metric == "f1":
+            monitored_value = val_f1
+        else:
+            monitored_value = val_auroc
+        if stopper.step(monitored_value, model):
             break
 
     stopper.restore_best(model)
@@ -125,6 +193,91 @@ def compute_auroc(
     labels_bin = label_binarize(all_labels, classes=classes)
     auroc = roc_auc_score(labels_bin, all_probs, multi_class="ovr", average="macro")
     return float(auroc)
+
+
+def compute_macro_f1(
+    model: nn.Module,
+    loader: DataLoader,
+    device: str = "cpu",
+) -> float:
+    model.eval()
+    all_preds = []
+    all_labels = []
+
+    with torch.no_grad():
+        for batch in loader:
+            cnn_feat, text_feat, face_feat, labels = [t.to(device) for t in batch]
+            logits = model(cnn_feat, text_feat, face_feat)
+            preds = torch.argmax(logits, dim=1).cpu().numpy()
+            all_preds.append(preds)
+            all_labels.append(labels.cpu().numpy())
+
+    all_preds = np.concatenate(all_preds, axis=0)
+    all_labels = np.concatenate(all_labels, axis=0)
+    return float(f1_score(all_labels, all_preds, average="macro"))
+
+
+def compute_loss(
+    model: nn.Module,
+    loader: DataLoader,
+    criterion: nn.Module,
+    device: str = "cpu",
+) -> float:
+    model.eval()
+    total_loss = 0.0
+
+    with torch.no_grad():
+        for batch in loader:
+            cnn_feat, text_feat, face_feat, labels = [t.to(device) for t in batch]
+            logits = model(cnn_feat, text_feat, face_feat)
+            total_loss += criterion(logits, labels).item() * labels.size(0)
+
+    return float(total_loss / len(loader.dataset))
+
+
+def collect_predictions(
+    model: nn.Module,
+    loader: DataLoader,
+    device: str = "cpu",
+) -> tuple[np.ndarray, np.ndarray]:
+    model.eval()
+    all_preds = []
+    all_labels = []
+
+    with torch.no_grad():
+        for batch in loader:
+            cnn_feat, text_feat, face_feat, labels = [t.to(device) for t in batch]
+            logits = model(cnn_feat, text_feat, face_feat)
+            preds = torch.argmax(logits, dim=1).cpu().numpy()
+            all_preds.append(preds)
+            all_labels.append(labels.cpu().numpy())
+
+    return np.concatenate(all_labels, axis=0), np.concatenate(all_preds, axis=0)
+
+
+def print_classification_breakdown(
+    model: nn.Module,
+    loader: DataLoader,
+    num_classes: int = 5,
+    device: str = "cpu",
+) -> None:
+    y_true, y_pred = collect_predictions(model, loader, device=device)
+    labels = list(range(num_classes))
+
+    cm = confusion_matrix(y_true, y_pred, labels=labels)
+    report = classification_report(
+        y_true,
+        y_pred,
+        labels=labels,
+        target_names=[f"class_{idx}" for idx in labels],
+        digits=4,
+        zero_division=0,
+    )
+
+    print("Test confusion matrix:")
+    print(cm)
+    print("Test classification report:")
+    print(report)
 
 
 def load_saved_split_ids(split_dir: Path, split_name: str) -> tuple[set[str], set[str], set[str]]:
@@ -415,8 +568,14 @@ def run_training_stage(
     batch_size: int,
     num_epochs: int,
     lr: float,
+    hidden1: int,
+    hidden2: int,
+    dropout_p: float,
     split_dir: Path,
     split_name: str,
+    early_stopping_metric: str,
+    early_stopping_patience: int,
+    early_stopping_min_delta: float,
     device: str,
 ) -> None:
     dataset = ThumbnailDataset(csv_path, cnn_path, text_path, face_path)
@@ -446,14 +605,26 @@ def run_training_stage(
 
     train_ds = Subset(dataset, train_indices)
     val_ds = Subset(dataset, val_indices)
+    test_ds = Subset(dataset, test_indices)
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
     all_labels = torch.stack([dataset[idx][3] for idx in train_indices])
     class_weights = compute_class_weights(all_labels, num_classes=5)
+    criterion = nn.CrossEntropyLoss(
+        weight=class_weights.to(device) if device != "cpu" else class_weights
+    )
 
-    model = FusionMLP(cnn_dim=cnn_dim, text_dim=text_dim, face_dim=face_dim)
+    model = FusionMLP(
+        cnn_dim=cnn_dim,
+        text_dim=text_dim,
+        face_dim=face_dim,
+        hidden1=hidden1,
+        hidden2=hidden2,
+        dropout_p=dropout_p,
+    )
     train(
         model,
         train_loader,
@@ -462,9 +633,21 @@ def run_training_stage(
         lr=lr,
         class_weights=class_weights,
         device=device,
+        early_stopping_patience=early_stopping_patience,
+        early_stopping_min_delta=early_stopping_min_delta,
+        early_stopping_metric=early_stopping_metric,
     )
 
-
+    test_loss = compute_loss(model, test_loader, criterion, device=device)
+    test_auroc = compute_auroc(model, test_loader, device=device)
+    test_f1 = compute_macro_f1(model, test_loader, device=device)
+    print(
+        f"Test metrics | "
+        f"Loss: {test_loss:.4f} | "
+        f"AUROC: {test_auroc:.4f} | "
+        f"F1: {test_f1:.4f}"
+    )
+    print_classification_breakdown(model, test_loader, num_classes=5, device=device)
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Build merged thumbnail features and train the fusion model."
@@ -575,6 +758,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Fusion training learning rate.",
     )
     parser.add_argument(
+        "--hidden1",
+        type=int,
+        default=512,
+        help="Width of the first hidden layer in the fusion MLP.",
+    )
+    parser.add_argument(
+        "--hidden2",
+        type=int,
+        default=256,
+        help="Width of the second hidden layer in the fusion MLP.",
+    )
+    parser.add_argument(
+        "--dropout_p",
+        type=float,
+        default=0.4,
+        help="Dropout probability in the fusion MLP.",
+    )
+    parser.add_argument(
         "--split_dir",
         type=Path,
         default=DATA_DIR / "splits",
@@ -588,10 +789,35 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Saved split prefix to use for fusion training.",
     )
     parser.add_argument(
+        "--early_stopping_metric",
+        type=str,
+        default="auroc",
+        choices=["auroc", "loss", "f1"],
+        help="Validation metric to monitor for early stopping.",
+    )
+    parser.add_argument(
+        "--early_stopping_patience",
+        type=int,
+        default=12,
+        help="Epochs to wait for improvement before stopping.",
+    )
+    parser.add_argument(
+        "--early_stopping_min_delta",
+        type=float,
+        default=1e-4,
+        help="Minimum improvement required to reset early stopping.",
+    )
+    parser.add_argument(
         "--device",
         type=str,
         default="cpu",
         help="Torch device for embeddings and training.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducible fusion training.",
     )
     parser.add_argument(
         "--artifact_root",
@@ -599,88 +825,99 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=Path("/content/drive/MyDrive/ECE324/youtube-thumbnail-performance-predictor-artifacts"),
         help="Directory containing cached/generated artifacts to restore from and sync back to.",
     )
+    parser.add_argument(
+        "--train_only",
+        action="store_true",
+        help="Skip artifact restore/refresh/sync and only train from existing processed files.",
+    )
     return parser
 
 
 def main() -> None:
     parser = build_arg_parser()
     args = parser.parse_args()
-    artifact_root = (
-        args.artifact_root
-        if args.artifact_root.exists() or "drive" in str(args.artifact_root).lower()
-        else None
-    )
+    set_seed(args.seed)
+    artifact_root = None
+    if not args.train_only:
+        artifact_root = (
+            args.artifact_root
+            if args.artifact_root.exists() or "drive" in str(args.artifact_root).lower()
+            else None
+        )
     ocr_use_gpu = (
         args.ocr_backend == "easyocr"
         and args.device.startswith("cuda")
         and torch.cuda.is_available()
     )
 
-    restore_artifacts([args.raw_csv_path], artifact_root, overwrite=True)
+    if args.train_only:
+        print("Train-only mode enabled: skipping artifact restore, feature refresh, and sync.")
+    else:
+        restore_artifacts([args.raw_csv_path], artifact_root, overwrite=True)
 
-    restore_artifacts(
-        [
-            args.labeled_csv_path,
-            args.cnn_cache_path,
-            args.ocr_csv_path,
-            args.face_cache_path,
-        ],
-        artifact_root,
-        overwrite=True,
-    )
+        restore_artifacts(
+            [
+                args.labeled_csv_path,
+                args.cnn_cache_path,
+                args.ocr_csv_path,
+                args.face_cache_path,
+            ],
+            artifact_root,
+            overwrite=True,
+        )
 
-    restore_artifacts(
-        [
-            args.cnn_output_path,
-            args.text_output_path,
-            args.face_output_path,
-        ],
-        artifact_root,
-        overwrite=False,
-    )
+        restore_artifacts(
+            [
+                args.cnn_output_path,
+                args.text_output_path,
+                args.face_output_path,
+            ],
+            artifact_root,
+            overwrite=False,
+        )
 
-    print("Stage 1/5: Building labeled dataset")
-    build_labeled_dataset(
-        input_path=args.raw_csv_path,
-        output_path=args.labeled_csv_path,
-        test_size=args.dataset_test_size,
-        random_state=args.dataset_random_state,
-    )
-    sync_artifacts_to_root([args.labeled_csv_path], artifact_root)
+        print("Stage 1/5: Building labeled dataset")
+        build_labeled_dataset(
+            input_path=args.raw_csv_path,
+            output_path=args.labeled_csv_path,
+            test_size=args.dataset_test_size,
+            random_state=args.dataset_random_state,
+        )
+        sync_artifacts_to_root([args.labeled_csv_path], artifact_root)
 
-    print("Stage 2/5: Extracting CNN embeddings")
-    run_cnn_stage(
-        csv_path=args.labeled_csv_path,
-        thumbnail_dirs=args.thumbnail_dirs,
-        output_path=args.cnn_output_path,
-        cache_path=args.cnn_cache_path,
-        device=args.device,
-    )
-    sync_artifacts_to_root([args.cnn_output_path, args.cnn_cache_path], artifact_root)
+        print("Stage 2/5: Extracting CNN embeddings")
+        run_cnn_stage(
+            csv_path=args.labeled_csv_path,
+            thumbnail_dirs=args.thumbnail_dirs,
+            output_path=args.cnn_output_path,
+            cache_path=args.cnn_cache_path,
+            device=args.device,
+        )
+        sync_artifacts_to_root([args.cnn_output_path, args.cnn_cache_path], artifact_root)
 
-    print("Stage 3/5: Refreshing OCR feature cache")
-    run_ocr_stage(
-        csv_path=args.labeled_csv_path,
-        thumbnail_dirs=args.thumbnail_dirs,
-        ocr_csv_path=args.ocr_csv_path,
-        output_path=args.text_output_path,
-        backend=args.ocr_backend,
-        seed_ocr_cache_paths=args.seed_ocr_cache_paths,
-        ocr_use_gpu=ocr_use_gpu,
-    )
-    sync_artifacts_to_root([args.ocr_csv_path, args.text_output_path], artifact_root)
+        print("Stage 3/5: Refreshing OCR feature cache")
+        run_ocr_stage(
+            csv_path=args.labeled_csv_path,
+            thumbnail_dirs=args.thumbnail_dirs,
+            ocr_csv_path=args.ocr_csv_path,
+            output_path=args.text_output_path,
+            backend=args.ocr_backend,
+            seed_ocr_cache_paths=args.seed_ocr_cache_paths,
+            ocr_use_gpu=ocr_use_gpu,
+        )
+        sync_artifacts_to_root([args.ocr_csv_path, args.text_output_path], artifact_root)
 
-    print("Stage 4/5: Extracting face/emotion features")
-    run_face_stage(
-        csv_path=args.labeled_csv_path,
-        thumbnail_dirs=args.thumbnail_dirs,
-        output_path=args.face_output_path,
-        cache_path=args.face_cache_path,
-        device=args.device,
-    )
-    sync_artifacts_to_root([args.face_output_path, args.face_cache_path], artifact_root)
+        print("Stage 4/5: Extracting face/emotion features")
+        run_face_stage(
+            csv_path=args.labeled_csv_path,
+            thumbnail_dirs=args.thumbnail_dirs,
+            output_path=args.face_output_path,
+            cache_path=args.face_cache_path,
+            device=args.device,
+        )
+        sync_artifacts_to_root([args.face_output_path, args.face_cache_path], artifact_root)
 
-    print("Stage 5/5: Training fusion model")
+    print("Training fusion model")
     run_training_stage(
         csv_path=args.labeled_csv_path,
         cnn_path=args.cnn_output_path,
@@ -689,23 +926,30 @@ def main() -> None:
         batch_size=args.batch_size,
         num_epochs=args.num_epochs,
         lr=args.lr,
+        hidden1=args.hidden1,
+        hidden2=args.hidden2,
+        dropout_p=args.dropout_p,
         split_dir=args.split_dir,
         split_name=args.split_name,
+        early_stopping_metric=args.early_stopping_metric,
+        early_stopping_patience=args.early_stopping_patience,
+        early_stopping_min_delta=args.early_stopping_min_delta,
         device=args.device,
     )
 
-    sync_artifacts_to_root(
-        [
-            args.labeled_csv_path,
-            args.cnn_output_path,
-            args.cnn_cache_path,
-            args.ocr_csv_path,
-            args.text_output_path,
-            args.face_output_path,
-            args.face_cache_path,
-        ],
-        artifact_root,
-    )
+    if not args.train_only:
+        sync_artifacts_to_root(
+            [
+                args.labeled_csv_path,
+                args.cnn_output_path,
+                args.cnn_cache_path,
+                args.ocr_csv_path,
+                args.text_output_path,
+                args.face_output_path,
+                args.face_cache_path,
+            ],
+            artifact_root,
+        )
 
 
 if __name__ == "__main__":
