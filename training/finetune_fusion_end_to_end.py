@@ -13,13 +13,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from sklearn.metrics import f1_score, roc_auc_score
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import label_binarize
 from torch.utils.data import DataLoader, Dataset
 from torchvision import models, transforms
 from PIL import Image
 
-from thumbnail_performance.config import MODELS_DIR, PROCESSED_DATA_DIR, RAW_DATA_DIR
+from thumbnail_performance.config import DATA_DIR, MODELS_DIR, PROCESSED_DATA_DIR, RAW_DATA_DIR
 from thumbnail_performance.dataset import read_csv_with_fallback
 from utils.class_weights import compute_class_weights
 
@@ -109,6 +108,22 @@ def align_metadata(
 
     labeled["has_image"] = labeled["image_path"].astype(str).str.len() > 0
     return labeled
+
+
+def load_saved_split_ids(split_dir: Path, split_name: str) -> tuple[set[str], set[str], set[str]]:
+    train_path = split_dir / f"{split_name}_train.csv"
+    val_path = split_dir / f"{split_name}_val.csv"
+    test_path = split_dir / f"{split_name}_test.csv"
+
+    for path in (train_path, val_path, test_path):
+        if not path.exists():
+            raise FileNotFoundError(f"Saved split file not found: {path}")
+
+    def read_ids(path: Path) -> set[str]:
+        df = read_csv_with_fallback(path)
+        return set(df["Id"].astype(str))
+
+    return read_ids(train_path), read_ids(val_path), read_ids(test_path)
 
 
 class ThumbnailFineTuneDataset(Dataset):
@@ -332,8 +347,17 @@ def main():
     parser.add_argument("--hidden1", type=int, default=512)
     parser.add_argument("--hidden2", type=int, default=256)
     parser.add_argument("--dropout_p", type=float, default=0.35)
-    parser.add_argument("--val_ratio", type=float, default=0.15)
-    parser.add_argument("--test_ratio", type=float, default=0.15)
+    parser.add_argument(
+        "--split_dir",
+        type=Path,
+        default=DATA_DIR / "splits",
+    )
+    parser.add_argument(
+        "--split_name",
+        type=str,
+        default="random",
+        choices=["random", "channel", "time"],
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument(
@@ -363,18 +387,20 @@ def main():
     print(f"Rows missing thumbnails: {int((~df['has_image']).sum())}")
     print(f"OCR dim: {len(OCR_FEAT_COLS)} | Face dim: {len(FACE_FEAT_COLS)}")
 
-    train_df, temp_df = train_test_split(
-        df,
-        test_size=args.val_ratio + args.test_ratio,
-        random_state=args.seed,
-        stratify=df["engagement_label"].astype(int),
-    )
-    val_share = args.val_ratio / (args.val_ratio + args.test_ratio)
-    val_df, test_df = train_test_split(
-        temp_df,
-        test_size=1.0 - val_share,
-        random_state=args.seed,
-        stratify=temp_df["engagement_label"].astype(int),
+    train_ids, val_ids, test_ids = load_saved_split_ids(args.split_dir, args.split_name)
+    train_df = df.loc[df["Id"].isin(train_ids)].copy()
+    val_df = df.loc[df["Id"].isin(val_ids)].copy()
+    test_df = df.loc[df["Id"].isin(test_ids)].copy()
+
+    if train_df.empty or val_df.empty or test_df.empty:
+        raise ValueError(
+            f"Saved split '{args.split_name}' produced an empty subset. "
+            "Check that split CSVs match the labeled dataset IDs."
+        )
+
+    print(
+        f"Using saved split '{args.split_name}': "
+        f"train={len(train_df)}, val={len(val_df)}, test={len(test_df)}"
     )
 
     train_ds = ThumbnailFineTuneDataset(train_df, IMAGE_TRANSFORM)

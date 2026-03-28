@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
 from thumbnail_performance.cnn_embeddings import (
@@ -24,7 +24,7 @@ from thumbnail_performance.dataset import ThumbnailDataset, main as build_labele
 from thumbnail_performance.face_emotion_detection import EMOTIONS, extract_face_emotion_features
 from thumbnail_performance.modeling.fusion_mlp import FusionMLP
 from thumbnail_performance.ocr_features import build_ocr_feature_dataframe
-from training.train_fusion import train
+from training.train_fusion import load_saved_split_ids, train
 from utils.class_weights import compute_class_weights
 
 
@@ -315,7 +315,8 @@ def run_training_stage(
     batch_size: int,
     num_epochs: int,
     lr: float,
-    val_ratio: float,
+    split_dir: Path,
+    split_name: str,
     device: str,
 ) -> None:
     dataset = ThumbnailDataset(csv_path, cnn_path, text_path, face_path)
@@ -324,14 +325,32 @@ def run_training_stage(
     face_dim = int(np.load(face_path, mmap_mode="r").shape[1])
     print(f"Training stage dims: cnn={cnn_dim}, text={text_dim}, face={face_dim}")
 
-    n_val = int(val_ratio * len(dataset))
-    n_train = len(dataset) - n_val
-    train_ds, val_ds = random_split(dataset, [n_train, n_val])
+    split_df = pd.read_csv(csv_path)
+    split_df["Id"] = split_df["Id"].astype(str)
+    train_ids, val_ids, test_ids = load_saved_split_ids(split_dir, split_name)
+    id_to_idx = {video_id: idx for idx, video_id in enumerate(split_df["Id"])}
+    train_indices = [id_to_idx[video_id] for video_id in split_df["Id"] if video_id in train_ids]
+    val_indices = [id_to_idx[video_id] for video_id in split_df["Id"] if video_id in val_ids]
+    test_indices = [id_to_idx[video_id] for video_id in split_df["Id"] if video_id in test_ids]
+
+    if not train_indices or not val_indices:
+        raise ValueError(
+            f"Saved split '{split_name}' produced an empty train/val subset. "
+            "Check that split CSVs match the labeled dataset IDs."
+        )
+
+    print(
+        f"Using saved split '{split_name}': "
+        f"train={len(train_indices)}, val={len(val_indices)}, test={len(test_indices)}"
+    )
+
+    train_ds = Subset(dataset, train_indices)
+    val_ds = Subset(dataset, val_indices)
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
 
-    all_labels = torch.stack([dataset[i][3] for i in range(len(dataset))])
+    all_labels = torch.stack([dataset[idx][3] for idx in train_indices])
     class_weights = compute_class_weights(all_labels, num_classes=5)
 
     model = FusionMLP(cnn_dim=cnn_dim, text_dim=text_dim, face_dim=face_dim)
@@ -456,10 +475,17 @@ if __name__ == "__main__":
         help="Fusion training learning rate.",
     )
     parser.add_argument(
-        "--val_ratio",
-        type=float,
-        default=0.15,
-        help="Validation split ratio for fusion training.",
+        "--split_dir",
+        type=Path,
+        default=RAW_DATA_DIR.parent / "splits",
+        help="Directory containing saved split CSV files.",
+    )
+    parser.add_argument(
+        "--split_name",
+        type=str,
+        default="random",
+        choices=["random", "channel", "time"],
+        help="Saved split prefix to use for fusion training.",
     )
     parser.add_argument(
         "--device",
@@ -563,7 +589,8 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         num_epochs=args.num_epochs,
         lr=args.lr,
-        val_ratio=args.val_ratio,
+        split_dir=args.split_dir,
+        split_name=args.split_name,
         device=args.device,
     )
 
