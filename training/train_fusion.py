@@ -30,7 +30,7 @@ from thumbnail_performance.dataset import (
     read_csv_with_fallback,
 )
 from thumbnail_performance.face_emotion_detection import EMOTIONS, extract_face_emotion_features
-from thumbnail_performance.modeling.fusion_mlp import EarlyStopping, FusionMLP
+from thumbnail_performance.modeling.fusion_mlp import EarlyStopping, EarlyStoppingMax, FusionMLP
 from thumbnail_performance.ocr_features import build_ocr_feature_dataframe
 from utils.class_weights import compute_class_weights
 
@@ -43,6 +43,9 @@ def train(
     lr: float = 1e-3,
     device: str = "cpu",
     class_weights: torch.Tensor = None,
+    early_stopping_patience: int = 12,
+    early_stopping_min_delta: float = 1e-4,
+    early_stopping_metric: str = "auroc",
 ) -> dict:
     model.to(device)
 
@@ -51,7 +54,19 @@ def train(
     )
     optimiser = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimiser, patience=3, factor=0.5)
-    stopper = EarlyStopping(patience=7, verbose=True)
+    if early_stopping_metric == "loss":
+        stopper = EarlyStopping(
+            patience=early_stopping_patience,
+            min_delta=early_stopping_min_delta,
+            verbose=True,
+        )
+    else:
+        stopper = EarlyStoppingMax(
+            patience=early_stopping_patience,
+            min_delta=early_stopping_min_delta,
+            verbose=True,
+            metric_name="AUROC",
+        )
 
     history = {"train_loss": [], "val_loss": [], "val_auroc": []}
 
@@ -93,7 +108,8 @@ def train(
             f"Val AUROC: {val_auroc:.4f}"
         )
 
-        if stopper.step(val_loss, model):
+        monitored_value = val_loss if early_stopping_metric == "loss" else val_auroc
+        if stopper.step(monitored_value, model):
             break
 
     stopper.restore_best(model)
@@ -417,6 +433,9 @@ def run_training_stage(
     lr: float,
     split_dir: Path,
     split_name: str,
+    early_stopping_metric: str,
+    early_stopping_patience: int,
+    early_stopping_min_delta: float,
     device: str,
 ) -> None:
     dataset = ThumbnailDataset(csv_path, cnn_path, text_path, face_path)
@@ -462,6 +481,9 @@ def run_training_stage(
         lr=lr,
         class_weights=class_weights,
         device=device,
+        early_stopping_patience=early_stopping_patience,
+        early_stopping_min_delta=early_stopping_min_delta,
+        early_stopping_metric=early_stopping_metric,
     )
 
 
@@ -588,6 +610,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Saved split prefix to use for fusion training.",
     )
     parser.add_argument(
+        "--early_stopping_metric",
+        type=str,
+        default="auroc",
+        choices=["auroc", "loss"],
+        help="Validation metric to monitor for early stopping.",
+    )
+    parser.add_argument(
+        "--early_stopping_patience",
+        type=int,
+        default=12,
+        help="Epochs to wait for improvement before stopping.",
+    )
+    parser.add_argument(
+        "--early_stopping_min_delta",
+        type=float,
+        default=1e-4,
+        help="Minimum improvement required to reset early stopping.",
+    )
+    parser.add_argument(
         "--device",
         type=str,
         default="cpu",
@@ -691,6 +732,9 @@ def main() -> None:
         lr=args.lr,
         split_dir=args.split_dir,
         split_name=args.split_name,
+        early_stopping_metric=args.early_stopping_metric,
+        early_stopping_patience=args.early_stopping_patience,
+        early_stopping_min_delta=args.early_stopping_min_delta,
         device=args.device,
     )
 

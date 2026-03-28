@@ -107,6 +107,52 @@ class EarlyStopping:
             model.load_state_dict(self.best_state)
             print("  ↩ Restored best model weights.")
 
+class EarlyStoppingMax:
+    """
+    Monitors a validation metric and stops training when it stops improving.
+    """
+
+    def __init__(
+        self,
+        patience: int = 7,
+        min_delta: float = 1e-4,
+        verbose: bool = True,
+        metric_name: str = "metric",
+    ):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.verbose = verbose
+        self.metric_name = metric_name
+        self.best_value = -float("inf")
+        self.counter = 0
+        self.best_state = None
+
+    def step(self, metric_value: float, model: nn.Module) -> bool:
+        if metric_value > self.best_value + self.min_delta:
+            if self.verbose:
+                print(
+                    f"  âœ“ Val {self.metric_name} improved "
+                    f"{self.best_value:.4f} â†’ {metric_value:.4f}. Saving model."
+                )
+            self.best_value = metric_value
+            self.counter = 0
+            self.best_state = {k: v.clone() for k, v in model.state_dict().items()}
+        else:
+            self.counter += 1
+            if self.verbose:
+                print(f"  Â· No improvement for {self.counter}/{self.patience} epochs.")
+            if self.counter >= self.patience:
+                if self.verbose:
+                    print("  âœ— Early stopping triggered.")
+                return True
+        return False
+
+    def restore_best(self, model: nn.Module):
+        if self.best_state is not None:
+            model.load_state_dict(self.best_state)
+            print("  â†© Restored best model weights.")
+
+
 if __name__ == "__main__":
     torch.manual_seed(42)
     np.random.seed(42)
