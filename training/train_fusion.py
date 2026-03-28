@@ -42,6 +42,38 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def build_warmup_cosine_scheduler(
+    optimizer: optim.Optimizer,
+    total_epochs: int,
+    base_lr: float,
+    warmup_epochs: int = 2,
+    min_lr_ratio: float = 0.05,
+):
+    total_epochs = max(1, total_epochs)
+    warmup_epochs = min(max(1, warmup_epochs), total_epochs)
+    cosine_epochs = max(1, total_epochs - warmup_epochs)
+
+    if total_epochs == 1:
+        return optim.lr_scheduler.ConstantLR(optimizer, factor=1.0, total_iters=1)
+
+    warmup = optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=0.1,
+        end_factor=1.0,
+        total_iters=warmup_epochs,
+    )
+    cosine = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=cosine_epochs,
+        eta_min=base_lr * min_lr_ratio,
+    )
+    return optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup, cosine],
+        milestones=[warmup_epochs],
+    )
+
+
 def train(
     model: FusionMLP,
     train_loader: DataLoader,
@@ -60,12 +92,10 @@ def train(
         weight=class_weights.to(device) if class_weights is not None else None
     )
     optimiser = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler_mode = "min" if early_stopping_metric == "loss" else "max"
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+    scheduler = build_warmup_cosine_scheduler(
         optimiser,
-        mode=scheduler_mode,
-        patience=3,
-        factor=0.5,
+        total_epochs=num_epochs,
+        base_lr=lr,
     )
     if early_stopping_metric == "loss":
         stopper = EarlyStopping(
@@ -110,13 +140,7 @@ def train(
 
         val_auroc = compute_auroc(model, val_loader, device=device)
         val_f1 = compute_macro_f1(model, val_loader, device=device)
-        if early_stopping_metric == "loss":
-            scheduler_value = val_loss
-        elif early_stopping_metric == "f1":
-            scheduler_value = val_f1
-        else:
-            scheduler_value = val_auroc
-        scheduler.step(scheduler_value)
+        scheduler.step()
 
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
