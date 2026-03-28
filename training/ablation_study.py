@@ -115,6 +115,10 @@ def run_ablation_experiment(
    face_path: Path = DEFAULT_FACE_PATH,
    split_dir: Path = DATA_DIR / "splits",
    split_name: str = "random",
+   num_epochs: int = 30,
+   lr: float = 1e-3,
+   early_stopping_metric: str = "auroc",
+   early_stopping_patience: int = 12,
 ):
    seeds = [42, 43, 44, 45, 46]
    device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -178,7 +182,12 @@ def run_ablation_experiment(
           
            _ = train(
                model=model, train_loader=train_loader, val_loader=val_loader,
-               num_epochs=30, lr=1e-3, device=device, class_weights=class_weights
+               num_epochs=num_epochs,
+               lr=lr,
+               device=device,
+               class_weights=class_weights,
+               early_stopping_metric=early_stopping_metric,
+               early_stopping_patience=early_stopping_patience,
            )
           
            auroc = compute_auroc(model, val_loader, num_classes=5, device=device)
@@ -262,6 +271,31 @@ if __name__ == "__main__":
        help="Batch size for the ablation data loaders.",
    )
    parser.add_argument(
+       "--num_epochs",
+       type=int,
+       default=30,
+       help="Maximum epochs per ablation run.",
+   )
+   parser.add_argument(
+       "--lr",
+       type=float,
+       default=1e-3,
+       help="Learning rate for ablation runs.",
+   )
+   parser.add_argument(
+       "--early_stopping_metric",
+       type=str,
+       default="auroc",
+       choices=["auroc", "loss", "f1"],
+       help="Validation metric to monitor for early stopping.",
+   )
+   parser.add_argument(
+       "--early_stopping_patience",
+       type=int,
+       default=12,
+       help="Epochs to wait for improvement before stopping.",
+   )
+   parser.add_argument(
        "--split_dir",
        type=Path,
        default=DATA_DIR / "splits",
@@ -290,5 +324,9 @@ if __name__ == "__main__":
        face_path=args.face_path,
        split_dir=args.split_dir,
        split_name=args.split_name,
+       num_epochs=args.num_epochs,
+       lr=args.lr,
+       early_stopping_metric=args.early_stopping_metric,
+       early_stopping_patience=args.early_stopping_patience,
    )
    generate_ablation_outputs(df, output_dir=args.output_dir)

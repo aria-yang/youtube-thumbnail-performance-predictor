@@ -97,7 +97,7 @@ def ensure_shap_installed():
         raise ModuleNotFoundError(
             "The 'shap' package is required to run this script. "
             "Install it in your project environment, then rerun "
-            "'python training/shap.py'."
+            "'python training/run_shap_analysis.py'."
         ) from exc
     finally:
         for idx, entry in reversed(removed_entries):
@@ -327,6 +327,8 @@ def train_or_load_model(
         lr=args.lr,
         device=args.device,
         class_weights=class_weights,
+        early_stopping_metric=args.early_stopping_metric,
+        early_stopping_patience=args.early_stopping_patience,
     )
 
     if args.checkpoint_path:
@@ -433,22 +435,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--csv_path",
         type=Path,
-        default=PROCESSED_DATA_DIR / "labeled_data.csv",
+        default=PROCESSED_DATA_DIR / "merged_labeled_data.csv",
     )
     parser.add_argument(
         "--cnn_path",
         type=Path,
-        default=PROCESSED_DATA_DIR / "cnn_embeddings.npy",
+        default=PROCESSED_DATA_DIR / "merged_cnn_embeddings_resnet50.npy",
     )
     parser.add_argument(
         "--text_path",
         type=Path,
-        default=PROCESSED_DATA_DIR / "text_embeddings.npy",
+        default=PROCESSED_DATA_DIR / "merged_text_embeddings.npy",
     )
     parser.add_argument(
         "--face_path",
         type=Path,
-        default=PROCESSED_DATA_DIR / "face_embeddings.npy",
+        default=PROCESSED_DATA_DIR / "merged_face_embeddings.npy",
     )
     parser.add_argument(
         "--checkpoint_path",
@@ -471,6 +473,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--num_epochs", type=int, default=30)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument(
+        "--early_stopping_metric",
+        type=str,
+        default="auroc",
+        choices=["auroc", "loss", "f1"],
+    )
+    parser.add_argument(
+        "--early_stopping_patience",
+        type=int,
+        default=12,
+    )
     parser.add_argument("--hidden1", type=int, default=512)
     parser.add_argument("--hidden2", type=int, default=256)
     parser.add_argument("--dropout", type=float, default=0.4)
