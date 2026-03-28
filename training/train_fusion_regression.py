@@ -1,6 +1,7 @@
 import argparse
 import json
 from pathlib import Path
+import random
 import shutil
 
 import numpy as np
@@ -19,6 +20,14 @@ from thumbnail_performance.modeling.fusion_mlp import EarlyStopping, FusionMLP
 DEFAULT_CSV_PATH = PROCESSED_DATA_DIR / "merged_labeled_data.csv"
 DEFAULT_TEXT_PATH = PROCESSED_DATA_DIR / "merged_text_embeddings.npy"
 DEFAULT_FACE_PATH = PROCESSED_DATA_DIR / "merged_face_embeddings.npy"
+
+
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def restore_artifact(local_path: Path, artifact_root: Path | None, overwrite: bool = False) -> None:
@@ -306,6 +315,12 @@ def main() -> None:
         help="Learning rate.",
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for model init, data shuffling, and torch/numpy/python RNGs.",
+    )
+    parser.add_argument(
         "--device",
         type=str,
         default="auto",
@@ -340,6 +355,7 @@ def main() -> None:
     if args.device == "auto" and device != "cuda":
         device = "cpu"
 
+    set_seed(args.seed)
     cnn_path = resolve_cnn_path(args.cnn_path)
     target_transform = None if args.target_transform == "none" else args.target_transform
 
@@ -381,7 +397,13 @@ def main() -> None:
             "Check that split CSVs match the labeled dataset IDs."
         )
 
-    train_loader = DataLoader(Subset(dataset, train_indices), batch_size=args.batch_size, shuffle=True)
+    train_generator = torch.Generator().manual_seed(args.seed)
+    train_loader = DataLoader(
+        Subset(dataset, train_indices),
+        batch_size=args.batch_size,
+        shuffle=True,
+        generator=train_generator,
+    )
     val_loader = DataLoader(Subset(dataset, val_indices), batch_size=args.batch_size, shuffle=False)
     test_loader = DataLoader(Subset(dataset, test_indices), batch_size=args.batch_size, shuffle=False)
 
@@ -418,6 +440,7 @@ def main() -> None:
             "text_dim": text_dim,
             "face_dim": face_dim,
             "device": device,
+            "seed": args.seed,
             "target_column": args.target_column,
             "target_transform": args.target_transform,
             "loss": args.loss,
@@ -432,6 +455,7 @@ def main() -> None:
         "target_transform": args.target_transform,
         "loss": args.loss,
         "split_name": args.split_name,
+        "seed": args.seed,
         "val_loss": val_loss,
         "val_metrics": val_metrics,
         "test_loss": test_loss,
@@ -442,6 +466,7 @@ def main() -> None:
     sync_artifacts_to_root([args.checkpoint_path, args.metrics_path], artifact_root)
 
     print(f"Using device: {device}")
+    print(f"Using seed: {args.seed}")
     print(f"Saved checkpoint to {args.checkpoint_path}")
     print(f"Saved metrics to {args.metrics_path}")
     print(f"Validation metrics: {val_metrics}")
