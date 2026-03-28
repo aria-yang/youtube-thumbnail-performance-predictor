@@ -431,6 +431,9 @@ def run_training_stage(
     batch_size: int,
     num_epochs: int,
     lr: float,
+    hidden1: int,
+    hidden2: int,
+    dropout_p: float,
     split_dir: Path,
     split_name: str,
     early_stopping_metric: str,
@@ -472,7 +475,14 @@ def run_training_stage(
     all_labels = torch.stack([dataset[idx][3] for idx in train_indices])
     class_weights = compute_class_weights(all_labels, num_classes=5)
 
-    model = FusionMLP(cnn_dim=cnn_dim, text_dim=text_dim, face_dim=face_dim)
+    model = FusionMLP(
+        cnn_dim=cnn_dim,
+        text_dim=text_dim,
+        face_dim=face_dim,
+        hidden1=hidden1,
+        hidden2=hidden2,
+        dropout_p=dropout_p,
+    )
     train(
         model,
         train_loader,
@@ -595,6 +605,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=float,
         default=1e-3,
         help="Fusion training learning rate.",
+    )
+    parser.add_argument(
+        "--hidden1",
+        type=int,
+        default=512,
+        help="Width of the first hidden layer in the fusion MLP.",
+    )
+    parser.add_argument(
+        "--hidden2",
+        type=int,
+        default=256,
+        help="Width of the second hidden layer in the fusion MLP.",
+    )
+    parser.add_argument(
+        "--dropout_p",
+        type=float,
+        default=0.4,
+        help="Dropout probability in the fusion MLP.",
     )
     parser.add_argument(
         "--split_dir",
@@ -730,6 +758,9 @@ def main() -> None:
         batch_size=args.batch_size,
         num_epochs=args.num_epochs,
         lr=args.lr,
+        hidden1=args.hidden1,
+        hidden2=args.hidden2,
+        dropout_p=args.dropout_p,
         split_dir=args.split_dir,
         split_name=args.split_name,
         early_stopping_metric=args.early_stopping_metric,
