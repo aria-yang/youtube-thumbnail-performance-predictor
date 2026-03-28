@@ -175,7 +175,34 @@ class EndToEndFusionModel(nn.Module):
 
         self.backbone = backbone
         self.cnn_dim = cnn_dim
-        self.input_dim = cnn_dim + text_dim + face_dim + 1
+        cnn_proj_dim = min(hidden1, 512)
+        aux_proj_dim = max(hidden2 // 2, 32)
+        missing_proj_dim = max(aux_proj_dim // 2, 8)
+
+        self.cnn_projector = nn.Sequential(
+            nn.Linear(cnn_dim, cnn_proj_dim),
+            nn.BatchNorm1d(cnn_proj_dim),
+            nn.ReLU(),
+            nn.Dropout(p=dropout_p),
+        )
+        self.text_projector = nn.Sequential(
+            nn.Linear(text_dim, aux_proj_dim),
+            nn.BatchNorm1d(aux_proj_dim),
+            nn.ReLU(),
+            nn.Dropout(p=dropout_p),
+        )
+        self.face_projector = nn.Sequential(
+            nn.Linear(face_dim, aux_proj_dim),
+            nn.BatchNorm1d(aux_proj_dim),
+            nn.ReLU(),
+            nn.Dropout(p=dropout_p),
+        )
+        self.missing_projector = nn.Sequential(
+            nn.Linear(1, missing_proj_dim),
+            nn.ReLU(),
+        )
+
+        self.input_dim = cnn_proj_dim + aux_proj_dim + aux_proj_dim + missing_proj_dim
         self.classifier = nn.Sequential(
             nn.Linear(self.input_dim, hidden1),
             nn.BatchNorm1d(hidden1),
@@ -208,7 +235,11 @@ class EndToEndFusionModel(nn.Module):
         image_missing: torch.Tensor,
     ) -> torch.Tensor:
         cnn_feat = self.backbone(images)
-        fused = torch.cat([cnn_feat, text_feat, face_feat, image_missing.unsqueeze(1)], dim=1)
+        cnn_feat = self.cnn_projector(cnn_feat)
+        text_feat = self.text_projector(text_feat)
+        face_feat = self.face_projector(face_feat)
+        missing_feat = self.missing_projector(image_missing.unsqueeze(1))
+        fused = torch.cat([cnn_feat, text_feat, face_feat, missing_feat], dim=1)
         return self.classifier(fused)
 
 
@@ -293,9 +324,13 @@ def build_optimizer(
     backbone_lr: float,
     weight_decay: float,
 ) -> optim.Optimizer:
-    classifier_params = [p for p in model.classifier.parameters() if p.requires_grad]
+    head_params = [
+        param
+        for name, param in model.named_parameters()
+        if param.requires_grad and not name.startswith("backbone.")
+    ]
     backbone_params = [p for p in model.backbone.parameters() if p.requires_grad]
-    param_groups = [{"params": classifier_params, "lr": head_lr}]
+    param_groups = [{"params": head_params, "lr": head_lr}]
     if backbone_params:
         param_groups.append({"params": backbone_params, "lr": backbone_lr})
     return optim.AdamW(param_groups, weight_decay=weight_decay)
