@@ -11,7 +11,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from sklearn.metrics import f1_score, roc_auc_score
+from sklearn.metrics import classification_report, confusion_matrix, f1_score, roc_auc_score
 from sklearn.preprocessing import label_binarize
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
@@ -191,6 +191,69 @@ def compute_macro_f1(
     all_preds = np.concatenate(all_preds, axis=0)
     all_labels = np.concatenate(all_labels, axis=0)
     return float(f1_score(all_labels, all_preds, average="macro"))
+
+
+def compute_loss(
+    model: nn.Module,
+    loader: DataLoader,
+    criterion: nn.Module,
+    device: str = "cpu",
+) -> float:
+    model.eval()
+    total_loss = 0.0
+
+    with torch.no_grad():
+        for batch in loader:
+            cnn_feat, text_feat, face_feat, labels = [t.to(device) for t in batch]
+            logits = model(cnn_feat, text_feat, face_feat)
+            total_loss += criterion(logits, labels).item() * labels.size(0)
+
+    return float(total_loss / len(loader.dataset))
+
+
+def collect_predictions(
+    model: nn.Module,
+    loader: DataLoader,
+    device: str = "cpu",
+) -> tuple[np.ndarray, np.ndarray]:
+    model.eval()
+    all_preds = []
+    all_labels = []
+
+    with torch.no_grad():
+        for batch in loader:
+            cnn_feat, text_feat, face_feat, labels = [t.to(device) for t in batch]
+            logits = model(cnn_feat, text_feat, face_feat)
+            preds = torch.argmax(logits, dim=1).cpu().numpy()
+            all_preds.append(preds)
+            all_labels.append(labels.cpu().numpy())
+
+    return np.concatenate(all_labels, axis=0), np.concatenate(all_preds, axis=0)
+
+
+def print_classification_breakdown(
+    model: nn.Module,
+    loader: DataLoader,
+    num_classes: int = 5,
+    device: str = "cpu",
+) -> None:
+    y_true, y_pred = collect_predictions(model, loader, device=device)
+    labels = list(range(num_classes))
+
+    cm = confusion_matrix(y_true, y_pred, labels=labels)
+    report = classification_report(
+        y_true,
+        y_pred,
+        labels=labels,
+        target_names=[f"class_{idx}" for idx in labels],
+        digits=4,
+        zero_division=0,
+    )
+
+    print("Test confusion matrix:")
+    print(cm)
+    print("Test classification report:")
+    print(report)
 
 
 def load_saved_split_ids(split_dir: Path, split_name: str) -> tuple[set[str], set[str], set[str]]:
@@ -518,12 +581,17 @@ def run_training_stage(
 
     train_ds = Subset(dataset, train_indices)
     val_ds = Subset(dataset, val_indices)
+    test_ds = Subset(dataset, test_indices)
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
     all_labels = torch.stack([dataset[idx][3] for idx in train_indices])
     class_weights = compute_class_weights(all_labels, num_classes=5)
+    criterion = nn.CrossEntropyLoss(
+        weight=class_weights.to(device) if device != "cpu" else class_weights
+    )
 
     model = FusionMLP(
         cnn_dim=cnn_dim,
@@ -545,6 +613,17 @@ def run_training_stage(
         early_stopping_min_delta=early_stopping_min_delta,
         early_stopping_metric=early_stopping_metric,
     )
+
+    test_loss = compute_loss(model, test_loader, criterion, device=device)
+    test_auroc = compute_auroc(model, test_loader, device=device)
+    test_f1 = compute_macro_f1(model, test_loader, device=device)
+    print(
+        f"Test metrics | "
+        f"Loss: {test_loss:.4f} | "
+        f"AUROC: {test_auroc:.4f} | "
+        f"F1: {test_f1:.4f}"
+    )
+    print_classification_breakdown(model, test_loader, num_classes=5, device=device)
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Build merged thumbnail features and train the fusion model."
