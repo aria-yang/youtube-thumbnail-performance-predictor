@@ -35,6 +35,13 @@ from thumbnail_performance.ocr_features import build_ocr_feature_dataframe
 from utils.class_weights import compute_class_weights
 
 
+def set_seed(seed: int) -> None:
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 def train(
     model: FusionMLP,
     train_loader: DataLoader,
@@ -53,7 +60,13 @@ def train(
         weight=class_weights.to(device) if class_weights is not None else None
     )
     optimiser = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimiser, patience=3, factor=0.5)
+    scheduler_mode = "min" if early_stopping_metric == "loss" else "max"
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimiser,
+        mode=scheduler_mode,
+        patience=3,
+        factor=0.5,
+    )
     if early_stopping_metric == "loss":
         stopper = EarlyStopping(
             patience=early_stopping_patience,
@@ -95,7 +108,8 @@ def train(
         val_loss /= len(val_loader.dataset)
 
         val_auroc = compute_auroc(model, val_loader, device=device)
-        scheduler.step(val_loss)
+        scheduler_value = val_loss if early_stopping_metric == "loss" else val_auroc
+        scheduler.step(scheduler_value)
 
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
@@ -495,8 +509,6 @@ def run_training_stage(
         early_stopping_min_delta=early_stopping_min_delta,
         early_stopping_metric=early_stopping_metric,
     )
-
-
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Build merged thumbnail features and train the fusion model."
@@ -663,6 +675,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Torch device for embeddings and training.",
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducible fusion training.",
+    )
+    parser.add_argument(
         "--artifact_root",
         type=Path,
         default=Path("/content/drive/MyDrive/ECE324/youtube-thumbnail-performance-predictor-artifacts"),
@@ -674,6 +692,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_arg_parser()
     args = parser.parse_args()
+    set_seed(args.seed)
     artifact_root = (
         args.artifact_root
         if args.artifact_root.exists() or "drive" in str(args.artifact_root).lower()
