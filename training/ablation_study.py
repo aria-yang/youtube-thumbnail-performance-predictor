@@ -5,16 +5,16 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset
 from pathlib import Path
 from loguru import logger
 
 
 # Project imports
-from thumbnail_performance.config import PROCESSED_DATA_DIR
-from thumbnail_performance.dataset import ThumbnailDataset
+from thumbnail_performance.config import DATA_DIR, PROCESSED_DATA_DIR
+from thumbnail_performance.dataset import ThumbnailDataset, read_csv_with_fallback
 from thumbnail_performance.modeling.fusion_mlp import FusionMLP
-from training.train_fusion import train, compute_auroc
+from training.train_fusion import compute_auroc, load_saved_split_ids, train
 
 
 DEFAULT_CSV_PATH = PROCESSED_DATA_DIR / "merged_labeled_data.csv"
@@ -55,6 +55,8 @@ def get_real_dataloaders(
    cnn_path: Path | None = None,
    text_path: Path = DEFAULT_TEXT_PATH,
    face_path: Path = DEFAULT_FACE_PATH,
+   split_dir: Path = DATA_DIR / "splits",
+   split_name: str = "random",
 ):
    """Loads the pre-extracted multi-modal features used by the fusion model."""
    logger.info("Loading real ThumbnailDataset features from disk...")
@@ -67,15 +69,19 @@ def get_real_dataloaders(
        text_path=text_path,
        face_path=face_path
    )
-  
-   all_labels = dataset.labels
+
+   split_df = read_csv_with_fallback(csv_path)
+   split_df["Id"] = split_df["Id"].astype(str)
+   train_ids, val_ids, _ = load_saved_split_ids(split_dir, split_name)
+   id_to_idx = {video_id: idx for idx, video_id in enumerate(split_df["Id"])}
+   train_indices = [id_to_idx[video_id] for video_id in split_df["Id"] if video_id in train_ids]
+   val_indices = [id_to_idx[video_id] for video_id in split_df["Id"] if video_id in val_ids]
+
+   train_ds = Subset(dataset, train_indices)
+   val_ds = Subset(dataset, val_indices)
+
+   all_labels = torch.stack([dataset[idx][3] for idx in train_indices])
    class_weights = compute_class_weights(all_labels, num_classes=5)
-  
-   n_total = len(dataset)
-   n_train = int(0.8 * n_total)
-   n_val = n_total - n_train
-  
-   train_ds, val_ds = random_split(dataset, [n_train, n_val])
   
    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
@@ -107,6 +113,8 @@ def run_ablation_experiment(
    cnn_path: Path | None = None,
    text_path: Path = DEFAULT_TEXT_PATH,
    face_path: Path = DEFAULT_FACE_PATH,
+   split_dir: Path = DATA_DIR / "splits",
+   split_name: str = "random",
 ):
    seeds = [42, 43, 44, 45, 46]
    device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -118,6 +126,8 @@ def run_ablation_experiment(
        cnn_path=cnn_path,
        text_path=text_path,
        face_path=face_path,
+       split_dir=split_dir,
+       split_name=split_name,
    )
    class_weights = class_weights.to(device)
 
@@ -252,6 +262,19 @@ if __name__ == "__main__":
        help="Batch size for the ablation data loaders.",
    )
    parser.add_argument(
+       "--split_dir",
+       type=Path,
+       default=DATA_DIR / "splits",
+       help="Directory containing saved split CSV files.",
+   )
+   parser.add_argument(
+       "--split_name",
+       type=str,
+       default="random",
+       choices=["random", "channel", "time"],
+       help="Saved split prefix to use.",
+   )
+   parser.add_argument(
        "--output_dir",
        type=str,
        default="outputs",
@@ -265,5 +288,7 @@ if __name__ == "__main__":
        cnn_path=args.cnn_path,
        text_path=args.text_path,
        face_path=args.face_path,
+       split_dir=args.split_dir,
+       split_name=args.split_name,
    )
    generate_ablation_outputs(df, output_dir=args.output_dir)

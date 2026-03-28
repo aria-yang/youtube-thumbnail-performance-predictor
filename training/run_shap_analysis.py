@@ -12,12 +12,12 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader, Dataset, Subset, random_split
+from torch.utils.data import DataLoader, Dataset, Subset
 
-from thumbnail_performance.config import MODELS_DIR, PROCESSED_DATA_DIR, RAW_DATA_DIR
+from thumbnail_performance.config import DATA_DIR, MODELS_DIR, PROCESSED_DATA_DIR, RAW_DATA_DIR
 from thumbnail_performance.dataset import parse_abbreviated_numeric, read_csv_with_fallback
 from thumbnail_performance.modeling.fusion_mlp import FusionMLP
-from training.train_fusion import train
+from training.train_fusion import load_saved_split_ids, train
 from utils.class_weights import compute_class_weights
 
 
@@ -228,15 +228,25 @@ def load_aligned_dataset(
 
 def split_dataset(
     dataset: Dataset,
-    val_ratio: float,
-    seed: int,
+    split_df: pd.DataFrame,
+    split_dir: Path,
+    split_name: str,
 ) -> tuple[Subset, Subset]:
-    n_val = int(len(dataset) * val_ratio)
-    n_val = max(1, n_val)
-    n_train = len(dataset) - n_val
+    split_df = split_df.copy()
+    split_df["Id"] = split_df["Id"].astype(str)
+    train_ids, val_ids, _ = load_saved_split_ids(split_dir, split_name)
+    id_to_idx = {video_id: idx for idx, video_id in enumerate(split_df["Id"])}
+    train_indices = [id_to_idx[video_id] for video_id in split_df["Id"] if video_id in train_ids]
+    val_indices = [id_to_idx[video_id] for video_id in split_df["Id"] if video_id in val_ids]
 
-    generator = torch.Generator().manual_seed(seed)
-    train_ds, val_ds = random_split(dataset, [n_train, n_val], generator=generator)
+    if not train_indices or not val_indices:
+        raise ValueError(
+            f"Saved split '{split_name}' produced an empty train/val subset. "
+            "Check that split CSVs match the aligned dataset IDs."
+        )
+
+    train_ds = Subset(dataset, train_indices)
+    val_ds = Subset(dataset, val_indices)
     return train_ds, val_ds
 
 
@@ -447,7 +457,17 @@ def parse_args() -> argparse.Namespace:
         help="Loads a saved model if present; otherwise trains and saves to this path.",
     )
     parser.add_argument("--output_dir", type=Path, default=Path("outputs"))
-    parser.add_argument("--val_ratio", type=float, default=0.2)
+    parser.add_argument(
+        "--split_dir",
+        type=Path,
+        default=DATA_DIR / "splits",
+    )
+    parser.add_argument(
+        "--split_name",
+        type=str,
+        default="random",
+        choices=["random", "channel", "time"],
+    )
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--num_epochs", type=int, default=30)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -485,7 +505,13 @@ def main() -> None:
     face_dim = dataset.face.shape[1]
     feature_names = build_feature_names(cnn_dim, text_dim, face_dim)
 
-    train_ds, val_ds = split_dataset(dataset, val_ratio=args.val_ratio, seed=args.seed)
+    aligned_df = read_csv_with_fallback(resolved_csv_path)
+    train_ds, val_ds = split_dataset(
+        dataset,
+        split_df=aligned_df,
+        split_dir=args.split_dir,
+        split_name=args.split_name,
+    )
     model = train_or_load_model(
         args=args,
         dataset=dataset,
