@@ -1,6 +1,7 @@
 import argparse
 import json
 from pathlib import Path
+import shutil
 
 import numpy as np
 import pandas as pd
@@ -18,6 +19,35 @@ from thumbnail_performance.modeling.fusion_mlp import EarlyStopping, FusionMLP
 DEFAULT_CSV_PATH = PROCESSED_DATA_DIR / "merged_labeled_data.csv"
 DEFAULT_TEXT_PATH = PROCESSED_DATA_DIR / "merged_text_embeddings.npy"
 DEFAULT_FACE_PATH = PROCESSED_DATA_DIR / "merged_face_embeddings.npy"
+
+
+def restore_artifact(local_path: Path, artifact_root: Path | None, overwrite: bool = False) -> None:
+    if artifact_root is None:
+        return
+    src = artifact_root / local_path.name
+    if src.exists() and (overwrite or not local_path.exists()):
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, local_path)
+        print(f"Restored {local_path.name} from {src}")
+
+
+def restore_artifacts(local_paths: list[Path], artifact_root: Path | None, overwrite: bool = False) -> None:
+    for local_path in local_paths:
+        restore_artifact(local_path, artifact_root, overwrite=overwrite)
+
+
+def sync_artifact_to_root(local_path: Path, artifact_root: Path | None) -> None:
+    if artifact_root is None or not local_path.exists():
+        return
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    dst = artifact_root / local_path.name
+    shutil.copy2(local_path, dst)
+    print(f"Synced {local_path.name} to {dst}")
+
+
+def sync_artifacts_to_root(local_paths: list[Path], artifact_root: Path | None) -> None:
+    for local_path in local_paths:
+        sync_artifact_to_root(local_path, artifact_root)
 
 
 def resolve_cnn_path(explicit_path: Path | None) -> Path:
@@ -278,8 +308,8 @@ def main() -> None:
     parser.add_argument(
         "--device",
         type=str,
-        default="cpu",
-        help="Torch device for training.",
+        default="auto",
+        help="Torch device for training. Use 'auto' to prefer CUDA when available.",
     )
     parser.add_argument(
         "--checkpoint_path",
@@ -293,10 +323,39 @@ def main() -> None:
         default=PROCESSED_DATA_DIR / "fusion_mlp_regression_metrics.json",
         help="Where to save final regression metrics.",
     )
+    parser.add_argument(
+        "--artifact_root",
+        type=Path,
+        default=Path("/content/drive/MyDrive/ECE324/youtube-thumbnail-performance-predictor-artifacts"),
+        help="Directory containing cached/generated artifacts to restore from and sync back to.",
+    )
     args = parser.parse_args()
+
+    artifact_root = (
+        args.artifact_root
+        if args.artifact_root.exists() or "drive" in str(args.artifact_root).lower()
+        else None
+    )
+    device = "cuda" if args.device == "auto" and torch.cuda.is_available() else args.device
+    if args.device == "auto" and device != "cuda":
+        device = "cpu"
 
     cnn_path = resolve_cnn_path(args.cnn_path)
     target_transform = None if args.target_transform == "none" else args.target_transform
+
+    restore_artifacts(
+        [
+            args.csv_path,
+            cnn_path,
+            args.text_path,
+            args.face_path,
+            args.split_dir / f"{args.split_name}_train.csv",
+            args.split_dir / f"{args.split_name}_val.csv",
+            args.split_dir / f"{args.split_name}_test.csv",
+        ],
+        artifact_root,
+        overwrite=False,
+    )
 
     dataset = ThumbnailDataset(
         csv_path=args.csv_path,
@@ -344,12 +403,12 @@ def main() -> None:
         num_epochs=args.num_epochs,
         lr=args.lr,
         loss_name=args.loss,
-        device=args.device,
+        device=device,
     )
 
     criterion = build_regression_loss(args.loss)
-    val_loss, val_metrics, _, _ = evaluate_regression(model, val_loader, criterion, args.device)
-    test_loss, test_metrics, _, _ = evaluate_regression(model, test_loader, criterion, args.device)
+    val_loss, val_metrics, _, _ = evaluate_regression(model, val_loader, criterion, device)
+    test_loss, test_metrics, _, _ = evaluate_regression(model, test_loader, criterion, device)
 
     args.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -358,6 +417,7 @@ def main() -> None:
             "cnn_dim": cnn_dim,
             "text_dim": text_dim,
             "face_dim": face_dim,
+            "device": device,
             "target_column": args.target_column,
             "target_transform": args.target_transform,
             "loss": args.loss,
@@ -379,7 +439,9 @@ def main() -> None:
     }
     args.metrics_path.parent.mkdir(parents=True, exist_ok=True)
     args.metrics_path.write_text(json.dumps(output, indent=2))
+    sync_artifacts_to_root([args.checkpoint_path, args.metrics_path], artifact_root)
 
+    print(f"Using device: {device}")
     print(f"Saved checkpoint to {args.checkpoint_path}")
     print(f"Saved metrics to {args.metrics_path}")
     print(f"Validation metrics: {val_metrics}")
