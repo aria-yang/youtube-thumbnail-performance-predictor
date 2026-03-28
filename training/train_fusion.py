@@ -11,7 +11,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import f1_score, roc_auc_score
 from sklearn.preprocessing import label_binarize
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
@@ -74,14 +74,15 @@ def train(
             verbose=True,
         )
     else:
+        metric_name = "AUROC" if early_stopping_metric == "auroc" else "F1"
         stopper = EarlyStoppingMax(
             patience=early_stopping_patience,
             min_delta=early_stopping_min_delta,
             verbose=True,
-            metric_name="AUROC",
+            metric_name=metric_name,
         )
 
-    history = {"train_loss": [], "val_loss": [], "val_auroc": []}
+    history = {"train_loss": [], "val_loss": [], "val_auroc": [], "val_f1": []}
 
     for epoch in range(1, num_epochs + 1):
         model.train()
@@ -108,21 +109,34 @@ def train(
         val_loss /= len(val_loader.dataset)
 
         val_auroc = compute_auroc(model, val_loader, device=device)
-        scheduler_value = val_loss if early_stopping_metric == "loss" else val_auroc
+        val_f1 = compute_macro_f1(model, val_loader, device=device)
+        if early_stopping_metric == "loss":
+            scheduler_value = val_loss
+        elif early_stopping_metric == "f1":
+            scheduler_value = val_f1
+        else:
+            scheduler_value = val_auroc
         scheduler.step(scheduler_value)
 
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
         history["val_auroc"].append(val_auroc)
+        history["val_f1"].append(val_f1)
 
         print(
             f"Epoch {epoch:03d} | "
             f"Train Loss: {train_loss:.4f} | "
             f"Val Loss: {val_loss:.4f} | "
-            f"Val AUROC: {val_auroc:.4f}"
+            f"Val AUROC: {val_auroc:.4f} | "
+            f"Val F1: {val_f1:.4f}"
         )
 
-        monitored_value = val_loss if early_stopping_metric == "loss" else val_auroc
+        if early_stopping_metric == "loss":
+            monitored_value = val_loss
+        elif early_stopping_metric == "f1":
+            monitored_value = val_f1
+        else:
+            monitored_value = val_auroc
         if stopper.step(monitored_value, model):
             break
 
@@ -155,6 +169,28 @@ def compute_auroc(
     labels_bin = label_binarize(all_labels, classes=classes)
     auroc = roc_auc_score(labels_bin, all_probs, multi_class="ovr", average="macro")
     return float(auroc)
+
+
+def compute_macro_f1(
+    model: nn.Module,
+    loader: DataLoader,
+    device: str = "cpu",
+) -> float:
+    model.eval()
+    all_preds = []
+    all_labels = []
+
+    with torch.no_grad():
+        for batch in loader:
+            cnn_feat, text_feat, face_feat, labels = [t.to(device) for t in batch]
+            logits = model(cnn_feat, text_feat, face_feat)
+            preds = torch.argmax(logits, dim=1).cpu().numpy()
+            all_preds.append(preds)
+            all_labels.append(labels.cpu().numpy())
+
+    all_preds = np.concatenate(all_preds, axis=0)
+    all_labels = np.concatenate(all_labels, axis=0)
+    return float(f1_score(all_labels, all_preds, average="macro"))
 
 
 def load_saved_split_ids(split_dir: Path, split_name: str) -> tuple[set[str], set[str], set[str]]:
@@ -653,7 +689,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--early_stopping_metric",
         type=str,
         default="auroc",
-        choices=["auroc", "loss"],
+        choices=["auroc", "loss", "f1"],
         help="Validation metric to monitor for early stopping.",
     )
     parser.add_argument(
@@ -686,6 +722,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=Path("/content/drive/MyDrive/ECE324/youtube-thumbnail-performance-predictor-artifacts"),
         help="Directory containing cached/generated artifacts to restore from and sync back to.",
     )
+    parser.add_argument(
+        "--train_only",
+        action="store_true",
+        help="Skip artifact restore/refresh/sync and only train from existing processed files.",
+    )
     return parser
 
 
@@ -693,82 +734,87 @@ def main() -> None:
     parser = build_arg_parser()
     args = parser.parse_args()
     set_seed(args.seed)
-    artifact_root = (
-        args.artifact_root
-        if args.artifact_root.exists() or "drive" in str(args.artifact_root).lower()
-        else None
-    )
+    artifact_root = None
+    if not args.train_only:
+        artifact_root = (
+            args.artifact_root
+            if args.artifact_root.exists() or "drive" in str(args.artifact_root).lower()
+            else None
+        )
     ocr_use_gpu = (
         args.ocr_backend == "easyocr"
         and args.device.startswith("cuda")
         and torch.cuda.is_available()
     )
 
-    restore_artifacts([args.raw_csv_path], artifact_root, overwrite=True)
+    if args.train_only:
+        print("Train-only mode enabled: skipping artifact restore, feature refresh, and sync.")
+    else:
+        restore_artifacts([args.raw_csv_path], artifact_root, overwrite=True)
 
-    restore_artifacts(
-        [
-            args.labeled_csv_path,
-            args.cnn_cache_path,
-            args.ocr_csv_path,
-            args.face_cache_path,
-        ],
-        artifact_root,
-        overwrite=True,
-    )
+        restore_artifacts(
+            [
+                args.labeled_csv_path,
+                args.cnn_cache_path,
+                args.ocr_csv_path,
+                args.face_cache_path,
+            ],
+            artifact_root,
+            overwrite=True,
+        )
 
-    restore_artifacts(
-        [
-            args.cnn_output_path,
-            args.text_output_path,
-            args.face_output_path,
-        ],
-        artifact_root,
-        overwrite=False,
-    )
+        restore_artifacts(
+            [
+                args.cnn_output_path,
+                args.text_output_path,
+                args.face_output_path,
+            ],
+            artifact_root,
+            overwrite=False,
+        )
 
-    print("Stage 1/5: Building labeled dataset")
-    build_labeled_dataset(
-        input_path=args.raw_csv_path,
-        output_path=args.labeled_csv_path,
-        test_size=args.dataset_test_size,
-        random_state=args.dataset_random_state,
-    )
-    sync_artifacts_to_root([args.labeled_csv_path], artifact_root)
+        print("Stage 1/5: Building labeled dataset")
+        build_labeled_dataset(
+            input_path=args.raw_csv_path,
+            output_path=args.labeled_csv_path,
+            test_size=args.dataset_test_size,
+            random_state=args.dataset_random_state,
+        )
+        sync_artifacts_to_root([args.labeled_csv_path], artifact_root)
 
-    print("Stage 2/5: Extracting CNN embeddings")
-    run_cnn_stage(
-        csv_path=args.labeled_csv_path,
-        thumbnail_dirs=args.thumbnail_dirs,
-        output_path=args.cnn_output_path,
-        cache_path=args.cnn_cache_path,
-        device=args.device,
-    )
-    sync_artifacts_to_root([args.cnn_output_path, args.cnn_cache_path], artifact_root)
+        print("Stage 2/5: Extracting CNN embeddings")
+        run_cnn_stage(
+            csv_path=args.labeled_csv_path,
+            thumbnail_dirs=args.thumbnail_dirs,
+            output_path=args.cnn_output_path,
+            cache_path=args.cnn_cache_path,
+            device=args.device,
+        )
+        sync_artifacts_to_root([args.cnn_output_path, args.cnn_cache_path], artifact_root)
 
-    print("Stage 3/5: Refreshing OCR feature cache")
-    run_ocr_stage(
-        csv_path=args.labeled_csv_path,
-        thumbnail_dirs=args.thumbnail_dirs,
-        ocr_csv_path=args.ocr_csv_path,
-        output_path=args.text_output_path,
-        backend=args.ocr_backend,
-        seed_ocr_cache_paths=args.seed_ocr_cache_paths,
-        ocr_use_gpu=ocr_use_gpu,
-    )
-    sync_artifacts_to_root([args.ocr_csv_path, args.text_output_path], artifact_root)
+        print("Stage 3/5: Refreshing OCR feature cache")
+        run_ocr_stage(
+            csv_path=args.labeled_csv_path,
+            thumbnail_dirs=args.thumbnail_dirs,
+            ocr_csv_path=args.ocr_csv_path,
+            output_path=args.text_output_path,
+            backend=args.ocr_backend,
+            seed_ocr_cache_paths=args.seed_ocr_cache_paths,
+            ocr_use_gpu=ocr_use_gpu,
+        )
+        sync_artifacts_to_root([args.ocr_csv_path, args.text_output_path], artifact_root)
 
-    print("Stage 4/5: Extracting face/emotion features")
-    run_face_stage(
-        csv_path=args.labeled_csv_path,
-        thumbnail_dirs=args.thumbnail_dirs,
-        output_path=args.face_output_path,
-        cache_path=args.face_cache_path,
-        device=args.device,
-    )
-    sync_artifacts_to_root([args.face_output_path, args.face_cache_path], artifact_root)
+        print("Stage 4/5: Extracting face/emotion features")
+        run_face_stage(
+            csv_path=args.labeled_csv_path,
+            thumbnail_dirs=args.thumbnail_dirs,
+            output_path=args.face_output_path,
+            cache_path=args.face_cache_path,
+            device=args.device,
+        )
+        sync_artifacts_to_root([args.face_output_path, args.face_cache_path], artifact_root)
 
-    print("Stage 5/5: Training fusion model")
+    print("Training fusion model")
     run_training_stage(
         csv_path=args.labeled_csv_path,
         cnn_path=args.cnn_output_path,
@@ -788,18 +834,19 @@ def main() -> None:
         device=args.device,
     )
 
-    sync_artifacts_to_root(
-        [
-            args.labeled_csv_path,
-            args.cnn_output_path,
-            args.cnn_cache_path,
-            args.ocr_csv_path,
-            args.text_output_path,
-            args.face_output_path,
-            args.face_cache_path,
-        ],
-        artifact_root,
-    )
+    if not args.train_only:
+        sync_artifacts_to_root(
+            [
+                args.labeled_csv_path,
+                args.cnn_output_path,
+                args.cnn_cache_path,
+                args.ocr_csv_path,
+                args.text_output_path,
+                args.face_output_path,
+                args.face_cache_path,
+            ],
+            artifact_root,
+        )
 
 
 if __name__ == "__main__":
