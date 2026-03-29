@@ -91,11 +91,24 @@ def build_warmup_cosine_scheduler(
 def build_thumbnail_index(thumbnail_dirs: list[Path]) -> dict[str, Path]:
     index: dict[str, Path] = {}
     for root in thumbnail_dirs:
+        print(f"Scanning thumbnails under {root}...", flush=True)
         if not root.exists():
+            print(f"Thumbnail directory not found, skipping: {root}", flush=True)
             continue
+        found_in_root = 0
         for path in root.rglob("*"):
             if path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
                 index.setdefault(path.stem, path)
+                found_in_root += 1
+                if found_in_root % 5000 == 0:
+                    print(
+                        f"  Indexed {found_in_root} images from {root.name} so far...",
+                        flush=True,
+                    )
+        print(
+            f"Finished scanning {root}: indexed {found_in_root} image files.",
+            flush=True,
+        )
     return index
 
 
@@ -121,6 +134,7 @@ def align_metadata(
     ocr_csv_path: Path,
     face_csv_path: Path,
 ) -> pd.DataFrame:
+    print(f"Loading labeled metadata from {labeled_csv_path}...", flush=True)
     labeled = read_csv_with_fallback(labeled_csv_path)
     labeled["Id"] = labeled["Id"].astype(str)
     labeled["Channel"] = labeled["Channel"].astype(str)
@@ -129,7 +143,9 @@ def align_metadata(
     labeled["image_path"] = labeled["Id"].map(lambda vid: thumbnail_index.get(str(vid)))
     labeled["image_path"] = labeled["image_path"].apply(lambda p: str(p) if p is not None else "")
 
+    print(f"Loading OCR features from {ocr_csv_path}...", flush=True)
     ocr_df = load_ocr_features(ocr_csv_path)
+    print(f"Loading face features from {face_csv_path}...", flush=True)
     face_df = load_face_features(face_csv_path)
 
     labeled = labeled.join(ocr_df[OCR_FEAT_COLS], on="Id")
@@ -462,6 +478,9 @@ def main():
 
     set_seed(args.seed)
     args.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Starting end-to-end fine-tuning on device={args.device}", flush=True)
+    print(f"Checkpoint path: {args.checkpoint_path}", flush=True)
+    print(f"History path: {args.history_path}", flush=True)
 
     df = align_metadata(
         labeled_csv_path=args.labeled_csv_path,
@@ -470,11 +489,12 @@ def main():
         face_csv_path=args.face_csv_path,
     )
 
-    print(f"Aligned dataset rows: {len(df)}")
-    print(f"Rows with thumbnails: {int(df['has_image'].sum())}")
-    print(f"Rows missing thumbnails: {int((~df['has_image']).sum())}")
-    print(f"OCR dim: {len(OCR_FEAT_COLS)} | Face dim: {len(FACE_FEAT_COLS)}")
+    print(f"Aligned dataset rows: {len(df)}", flush=True)
+    print(f"Rows with thumbnails: {int(df['has_image'].sum())}", flush=True)
+    print(f"Rows missing thumbnails: {int((~df['has_image']).sum())}", flush=True)
+    print(f"OCR dim: {len(OCR_FEAT_COLS)} | Face dim: {len(FACE_FEAT_COLS)}", flush=True)
 
+    print(f"Loading saved split IDs from {args.split_dir}...", flush=True)
     train_ids, val_ids, test_ids = load_saved_split_ids(args.split_dir, args.split_name)
     train_df = df.loc[df["Id"].isin(train_ids)].copy()
     val_df = df.loc[df["Id"].isin(val_ids)].copy()
@@ -489,12 +509,17 @@ def main():
     print(
         f"Using saved split '{args.split_name}': "
         f"train={len(train_df)}, val={len(val_df)}, test={len(test_df)}"
-    )
+    , flush=True)
 
+    print("Building PyTorch datasets...", flush=True)
     train_ds = ThumbnailFineTuneDataset(train_df, IMAGE_TRANSFORM)
     val_ds = ThumbnailFineTuneDataset(val_df, IMAGE_TRANSFORM)
     test_ds = ThumbnailFineTuneDataset(test_df, IMAGE_TRANSFORM)
 
+    print(
+        f"Creating data loaders with batch_size={args.batch_size} and num_workers=2...",
+        flush=True,
+    )
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=2, pin_memory=True)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
     test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
@@ -505,6 +530,7 @@ def main():
     ).to(args.device)
     criterion = nn.CrossEntropyLoss(weight=class_weights)
 
+    print("Initializing end-to-end fusion model...", flush=True)
     model = EndToEndFusionModel(
         text_dim=len(OCR_FEAT_COLS),
         face_dim=len(FACE_FEAT_COLS),
@@ -514,6 +540,7 @@ def main():
     ).to(args.device)
 
     model.freeze_backbone()
+    print("Backbone frozen for warm-up stage.", flush=True)
     optimizer, scheduler = build_stage_optimizer_and_scheduler(
         model,
         head_lr=args.head_lr,
@@ -521,6 +548,7 @@ def main():
         weight_decay=args.weight_decay,
         remaining_epochs=args.num_epochs,
     )
+    print("Optimizer and scheduler ready. Starting training loop...", flush=True)
 
     best_val_auroc = -float("inf")
     best_state = None
@@ -536,7 +564,7 @@ def main():
                 weight_decay=args.weight_decay,
                 remaining_epochs=args.num_epochs - epoch + 1,
             )
-            print("Unfroze ResNet-50 layer4.")
+            print("Unfroze ResNet-50 layer4.", flush=True)
         if epoch == args.unfreeze_all_epoch:
             model.unfreeze_all()
             optimizer, scheduler = build_stage_optimizer_and_scheduler(
@@ -546,8 +574,9 @@ def main():
                 weight_decay=args.weight_decay,
                 remaining_epochs=args.num_epochs - epoch + 1,
             )
-            print("Unfroze all ResNet-50 layers.")
+            print("Unfroze all ResNet-50 layers.", flush=True)
 
+        print(f"Starting epoch {epoch:02d}/{args.num_epochs}...", flush=True)
         train_loss = train_one_epoch(model, train_loader, optimizer, criterion, args.device)
         val_metrics = compute_metrics(model, val_loader, args.device)
         scheduler.step()
@@ -565,13 +594,13 @@ def main():
             f"val_loss={val_metrics['loss']:.4f} | "
             f"val_macro_auroc={val_metrics['macro_auroc']:.4f} | "
             f"val_macro_f1={val_metrics['macro_f1']:.4f}"
-        )
+        , flush=True)
 
         if val_metrics["macro_auroc"] > best_val_auroc:
             best_val_auroc = val_metrics["macro_auroc"]
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             torch.save(best_state, args.checkpoint_path)
-            print(f"Saved best checkpoint to {args.checkpoint_path}")
+            print(f"Saved best checkpoint to {args.checkpoint_path}", flush=True)
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -581,10 +610,10 @@ def main():
         f"Test metrics | loss={test_metrics['loss']:.4f} | "
         f"macro_auroc={test_metrics['macro_auroc']:.4f} | "
         f"macro_f1={test_metrics['macro_f1']:.4f}"
-    )
+    , flush=True)
 
     save_history_csv(history, args.history_path)
-    print(f"Saved training history to {args.history_path}")
+    print(f"Saved training history to {args.history_path}", flush=True)
 
 
 if __name__ == "__main__":
