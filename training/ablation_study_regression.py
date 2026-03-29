@@ -182,9 +182,11 @@ def generate_ablation_outputs(
     summary.columns = [
         "_".join(col).strip("_") if isinstance(col, tuple) else col for col in summary.columns
     ]
+    # Match the discretized ablation plot convention: show weaker-performing models
+    # on the left and stronger-performing models on the right.
     summary = summary.sort_values(
         f"{ranking_metric}_mean",
-        ascending=ranking_metric in {"val_mae", "val_rmse"},
+        ascending=ranking_metric in {"val_r2", "val_spearman"},
     ).reset_index(drop=True)
 
     summary_path = output_dir / "ablation_regression_summary.csv"
