@@ -195,12 +195,13 @@ def generate_ablation_outputs(
     df_results.to_csv(raw_path, index=False)
     summary.to_csv(summary_path, index=False)
 
+    plot_order = ["CNN-only", "CNN + Text", "CNN + Face", "CNN + Text + Face"]
     plt.figure(figsize=(10, 6))
     sns.boxplot(
         data=df_results,
         x="model",
         y=ranking_metric,
-        order=summary["model"],
+        order=plot_order,
         palette="Greens",
         showfliers=False,
     )
@@ -208,7 +209,7 @@ def generate_ablation_outputs(
         data=df_results,
         x="model",
         y=ranking_metric,
-        order=summary["model"],
+        order=plot_order,
         color="black",
         alpha=0.6,
         jitter=True,
