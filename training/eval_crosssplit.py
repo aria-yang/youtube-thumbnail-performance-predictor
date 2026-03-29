@@ -12,7 +12,11 @@ Outputs:
 
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -32,8 +36,8 @@ from training.train_fusion import (
 
 
 DEFAULT_CSV_PATH = PROCESSED_DATA_DIR / "merged_labeled_data.csv"
-DEFAULT_TEXT_PATH = PROCESSED_DATA_DIR / "text_embeddings.npy"
-DEFAULT_FACE_PATH = PROCESSED_DATA_DIR / "face_embeddings.npy"
+DEFAULT_TEXT_PATH = PROCESSED_DATA_DIR / "merged_text_embeddings.npy"
+DEFAULT_FACE_PATH = PROCESSED_DATA_DIR / "merged_face_embeddings.npy"
 DEFAULT_CHECKPOINT = MODELS_DIR / "fusion_mlp.pt"
 
 
@@ -168,6 +172,17 @@ def main() -> None:
     )
 
     # Load dataset
+    csv_rows = len(read_csv_with_fallback(args.csv_path))
+    cnn_rows = int(np.load(cnn_path, mmap_mode="r").shape[0])
+    text_rows = int(np.load(args.text_path, mmap_mode="r").shape[0])
+    face_rows = int(np.load(args.face_path, mmap_mode="r").shape[0])
+    if len({csv_rows, cnn_rows, text_rows, face_rows}) != 1:
+        raise ValueError(
+            "Cross-split inputs are misaligned. "
+            f"csv={csv_rows}, cnn={cnn_rows}, text={text_rows}, face={face_rows}. "
+            "Make sure all four inputs come from the same merged or non-merged dataset."
+        )
+
     dataset = ThumbnailDataset(
         csv_path=args.csv_path,
         cnn_path=cnn_path,

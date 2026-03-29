@@ -23,7 +23,7 @@ from thumbnail_performance.cnn_embeddings import (
     build_embedding_model,
 )
 from thumbnail_performance.cnn_embeddings import resolve_thumbnail_path as resolve_cnn_path
-from thumbnail_performance.config import DATA_DIR, PROCESSED_DATA_DIR, RAW_DATA_DIR
+from thumbnail_performance.config import DATA_DIR, MODELS_DIR, PROCESSED_DATA_DIR, RAW_DATA_DIR
 from thumbnail_performance.dataset import (
     ThumbnailDataset,
     main as build_labeled_dataset,
@@ -577,6 +577,7 @@ def run_training_stage(
     early_stopping_patience: int,
     early_stopping_min_delta: float,
     device: str,
+    checkpoint_path: Path,
 ) -> None:
     dataset = ThumbnailDataset(csv_path, cnn_path, text_path, face_path)
     cnn_dim = int(np.load(cnn_path, mmap_mode="r").shape[1])
@@ -637,6 +638,22 @@ def run_training_stage(
         early_stopping_min_delta=early_stopping_min_delta,
         early_stopping_metric=early_stopping_metric,
     )
+
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "model_state_dict": model.state_dict(),
+            "cnn_dim": cnn_dim,
+            "text_dim": text_dim,
+            "face_dim": face_dim,
+            "hidden1": hidden1,
+            "hidden2": hidden2,
+            "dropout_p": dropout_p,
+            "split_name": split_name,
+        },
+        checkpoint_path,
+    )
+    print(f"Saved fusion checkpoint to {checkpoint_path}")
 
     test_loss = compute_loss(model, test_loader, criterion, device=device)
     test_auroc = compute_auroc(model, test_loader, device=device)
@@ -830,6 +847,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip artifact restore/refresh/sync and only train from existing processed files.",
     )
+    parser.add_argument(
+        "--checkpoint_path",
+        type=Path,
+        default=MODELS_DIR / "fusion_mlp.pt",
+        help="Output path for the trained FusionMLP checkpoint.",
+    )
     return parser
 
 
@@ -935,6 +958,7 @@ def main() -> None:
         early_stopping_patience=args.early_stopping_patience,
         early_stopping_min_delta=args.early_stopping_min_delta,
         device=args.device,
+        checkpoint_path=args.checkpoint_path,
     )
 
     if not args.train_only:
@@ -947,6 +971,7 @@ def main() -> None:
                 args.text_output_path,
                 args.face_output_path,
                 args.face_cache_path,
+                args.checkpoint_path,
             ],
             artifact_root,
         )
