@@ -197,3 +197,14 @@ data/processed/ocr_scalar_features_unused.npy
 data/processed/merged_title_embedding_cache.csv
 data/processed/merged_labeled_data.csv
 data/processed/new_labeled_data.csv
+data/processed/fusion_regression_tuning_summary.json
+
+# Imported model artifacts
+models/fusion_mlp.pt
+models/fusion_mlp_regression.pt
+models/fusion_mlp_regression_final_seed42.pt
+
+# Imported split artifacts
+data/splits/random_train.csv
+data/splits/random_val.csv
+data/splits/random_test.csv
