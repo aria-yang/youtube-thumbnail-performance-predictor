@@ -88,7 +88,6 @@ class ThumbnailPrediction:
     predicted_label: str
     class_probabilities: dict[str, float]
     predicted_normalized_performance: float
-    predicted_views: float
     extracted_features: dict[str, Any]
     note: str
 
@@ -364,13 +363,12 @@ def invert_regression_prediction(
 
 def predict_regression_views(
     features: ExtractedFeatures,
-    subscriber_count: int,
     model_path: Path,
     target_mode: str,
     zscore_mean: float | None,
     zscore_std: float | None,
     device: str,
-) -> tuple[float, float]:
+) -> float:
     model = load_fusion_model(
         model_path=model_path,
         cnn_dim=features.cnn_dim,
@@ -390,9 +388,7 @@ def predict_regression_views(
         zscore_mean=zscore_mean,
         zscore_std=zscore_std,
     )
-    predicted_normalized_performance = max(predicted_normalized_performance, 0.0)
-    predicted_views = predicted_normalized_performance * float(subscriber_count)
-    return predicted_normalized_performance, predicted_views
+    return max(predicted_normalized_performance, 0.0)
 
 
 def predict_thumbnail(
@@ -423,9 +419,8 @@ def predict_thumbnail(
         model_path=classification_model_path,
         device=device,
     )
-    predicted_normalized_performance, predicted_views = predict_regression_views(
+    predicted_normalized_performance = predict_regression_views(
         features=features,
-        subscriber_count=subscriber_count,
         model_path=regression_model_path,
         target_mode=regression_target_mode,
         zscore_mean=regression_zscore_mean,
@@ -440,7 +435,6 @@ def predict_thumbnail(
         predicted_label=predicted_label,
         class_probabilities=class_probabilities,
         predicted_normalized_performance=predicted_normalized_performance,
-        predicted_views=predicted_views,
         extracted_features={
             "ocr": features.text_metadata,
             "face": features.face_metadata,
@@ -451,9 +445,8 @@ def predict_thumbnail(
             },
         },
         note=(
-            "A/B ranking uses the tuned regression setup to estimate normalized performance "
-            "(views divided by subscriber count), then multiplies by the entered subscriber "
-            "count to estimate views. Bin classification uses the discretized FusionMLP."
+            "A/B ranking uses the tuned regression setup to estimate relative normalized "
+            "performance. Bin classification uses the discretized FusionMLP."
         ),
     )
 
@@ -462,19 +455,19 @@ def compare_thumbnail_predictions(
     prediction_a: ThumbnailPrediction,
     prediction_b: ThumbnailPrediction,
 ) -> tuple[str, float, float]:
-    score_a = prediction_a.predicted_views
-    score_b = prediction_b.predicted_views
+    score_a = prediction_a.predicted_normalized_performance
+    score_b = prediction_b.predicted_normalized_performance
 
     if np.isclose(score_a, score_b, atol=1e-6):
         return (
-            "Both thumbnails are effectively tied by the predicted view estimate.",
+            "Both thumbnails are effectively tied by the predicted relative performance score.",
             score_a,
             score_b,
         )
 
     winner = "Thumbnail A" if score_a > score_b else "Thumbnail B"
     return (
-        f"{winner} is predicted to perform better based on estimated views.",
+        f"{winner} is expected to perform better.",
         score_a,
         score_b,
     )
@@ -483,8 +476,7 @@ def compare_thumbnail_predictions(
 def build_prediction_lines(prediction: ThumbnailPrediction) -> list[str]:
     lines = [
         f"Predicted bin: {prediction.predicted_class} ({prediction.predicted_label})",
-        f"Predicted views/subscriber: {prediction.predicted_normalized_performance:.6f}",
-        f"Estimated views: {prediction.predicted_views:.2f}",
+        f"Predicted relative performance score: {prediction.predicted_normalized_performance:.6f}",
         "",
         "Class probabilities:",
     ]
@@ -498,8 +490,7 @@ def build_prediction_lines(prediction: ThumbnailPrediction) -> list[str]:
 def print_prediction(prediction: ThumbnailPrediction) -> None:
     print("\nPrediction summary:")
     print(f"  Predicted bin: {prediction.predicted_class} ({prediction.predicted_label})")
-    print(f"  Predicted views/subscriber: {prediction.predicted_normalized_performance:.6f}")
-    print(f"  Estimated views: {prediction.predicted_views:.2f}")
+    print(f"  Predicted relative performance score: {prediction.predicted_normalized_performance:.6f}")
 
     print("\nContext:")
     print(f"  Image path: {prediction.image_path}")
@@ -527,7 +518,7 @@ class PillButton(tk.Canvas):
         try:
             parent_bg = parent.cget("background")
         except tk.TclError:
-            parent_bg = "#fff5f5"
+            parent_bg = "#111111"
         super().__init__(
             parent,
             width=width,
@@ -596,20 +587,20 @@ class ThumbnailPredictionGUI:
         self.root = tk.Tk()
         self.root.title("Thumbnail A/B Predictor")
         self.root.geometry("1080x920")
-        self.root.configure(bg="#fff5f5")
+        self.root.configure(bg="#111111")
 
         self.image_path_var_a = tk.StringVar(value="No image selected for Thumbnail A")
         self.image_path_var_b = tk.StringVar(value="No image selected for Thumbnail B")
         self.subscriber_count_var = tk.StringVar()
         self.verdict_var = tk.StringVar(
-            value="Upload two thumbnails to compare predicted bins and estimated views."
+            value="Upload two thumbnails to compare which one is expected to perform better and the predicted bins."
         )
         self.abtest_var = tk.StringVar(
             value="A/B testing verdict will appear here."
         )
         self.note_var = tk.StringVar(
             value=(
-                "A/B ranking uses the tuned regression setup for estimated views. "
+                "A/B ranking uses the tuned regression setup for relative performance. "
                 "Bin output uses the discretized classifier."
             )
         )
@@ -625,17 +616,17 @@ class ThumbnailPredictionGUI:
             style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("App.TFrame", background="#fff5f5")
-        style.configure("Surface.TFrame", background="#ffffff")
-        style.configure("Hero.TFrame", background="#ffffff")
-        style.configure("Card.TLabelframe", background="#ffffff", borderwidth=1, relief="solid", bordercolor="#f3c7cc")
-        style.configure("Card.TLabelframe.Label", background="#ffffff", foreground="#a61b29", font=("Segoe UI", 11, "bold"))
-        style.configure("Header.TLabel", background="#fff5f5", foreground="#8f1020", font=("Segoe UI", 24, "bold"))
-        style.configure("Body.TLabel", background="#fff5f5", foreground="#6f2430", font=("Segoe UI", 11))
-        style.configure("CardLabel.TLabel", background="#ffffff", foreground="#5b2029", font=("Segoe UI", 10))
-        style.configure("Meta.TLabel", background="#ffffff", foreground="#9c4b58", font=("Segoe UI", 9, "bold"))
-        style.configure("Section.TLabel", background="#ffffff", foreground="#8f1020", font=("Segoe UI", 12, "bold"))
-        style.configure("Modern.TEntry", fieldbackground="#fff8f8", foreground="#4a1921", bordercolor="#e7a8b0", lightcolor="#c81d25", darkcolor="#e7a8b0", padding=7)
+        style.configure("App.TFrame", background="#111111")
+        style.configure("Surface.TFrame", background="#181818")
+        style.configure("Hero.TFrame", background="#181818")
+        style.configure("Card.TLabelframe", background="#181818", borderwidth=1, relief="solid", bordercolor="#343434")
+        style.configure("Card.TLabelframe.Label", background="#181818", foreground="#ff4d5a", font=("Segoe UI", 11, "bold"))
+        style.configure("Header.TLabel", background="#111111", foreground="#ff4d5a", font=("Segoe UI", 24, "bold"))
+        style.configure("Body.TLabel", background="#111111", foreground="#d7d7d7", font=("Segoe UI", 11))
+        style.configure("CardLabel.TLabel", background="#181818", foreground="#f3f3f3", font=("Segoe UI", 10))
+        style.configure("Meta.TLabel", background="#181818", foreground="#ff9aa2", font=("Segoe UI", 9, "bold"))
+        style.configure("Section.TLabel", background="#181818", foreground="#ff4d5a", font=("Segoe UI", 12, "bold"))
+        style.configure("Modern.TEntry", fieldbackground="#101010", foreground="#f5f5f5", bordercolor="#454545", lightcolor="#ff2f3d", darkcolor="#454545", padding=7)
 
     def _build_layout(self) -> None:
         container = ttk.Frame(self.root, padding=18, style="App.TFrame")
@@ -644,26 +635,26 @@ class ThumbnailPredictionGUI:
         hero = ttk.Frame(container, padding=20, style="Hero.TFrame")
         hero.pack(fill="x", pady=(0, 18))
 
-        banner = tk.Frame(hero, bg="#c81d25", height=8)
+        banner = tk.Frame(hero, bg="#ff2f3d", height=8)
         banner.pack(fill="x", pady=(0, 16))
 
         ttk.Label(
             hero,
             text="Thumbnail Performance A/B Predictor",
             font=("Segoe UI", 26, "bold"),
-            foreground="#8f1020",
-            background="#ffffff",
+            foreground="#ff4d5a",
+            background="#181818",
         ).pack(anchor="w", pady=(0, 6))
 
         ttk.Label(
             hero,
             text=(
-                "Upload two thumbnail variants, enter subscriber count, estimate which one "
-                "wins by tuned regression, and also view the discretized engagement bin."
+                "Upload two thumbnail variants, enter subscriber count, see which one is "
+                "expected to perform better, and view the discretized bin estimates."
             ),
             wraplength=780,
-            foreground="#6f2430",
-            background="#ffffff",
+            foreground="#d7d7d7",
+            background="#181818",
         ).pack(anchor="w", pady=(0, 16))
 
         pill_row = ttk.Frame(hero, style="Hero.TFrame")
@@ -707,8 +698,8 @@ class ThumbnailPredictionGUI:
             width=190,
             height=42,
             radius=21,
-            bg_color="#c81d25",
-            hover_color="#a8141b",
+            bg_color="#ff2f3d",
+            hover_color="#d61f2d",
             text_color="#ffffff",
             font=("Segoe UI", 10, "bold"),
         ).pack(anchor="w")
@@ -723,8 +714,8 @@ class ThumbnailPredictionGUI:
             width=190,
             height=42,
             radius=21,
-            bg_color="#c81d25",
-            hover_color="#a8141b",
+            bg_color="#ff2f3d",
+            hover_color="#d61f2d",
             text_color="#ffffff",
             font=("Segoe UI", 10, "bold"),
         ).pack(anchor="w")
@@ -741,8 +732,8 @@ class ThumbnailPredictionGUI:
             width=220,
             height=48,
             radius=24,
-            bg_color="#c81d25",
-            hover_color="#a8141b",
+            bg_color="#ff2f3d",
+            hover_color="#d61f2d",
             text_color="#ffffff",
             font=("Segoe UI", 11, "bold"),
         ).pack(anchor="center")
@@ -770,21 +761,21 @@ class ThumbnailPredictionGUI:
         results_grid.pack(fill="both", expand=True)
 
         left_results = ttk.LabelFrame(results_grid, text="Thumbnail A Breakdown", padding=12, style="Card.TLabelframe")
-        left_results.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        left_results.pack(fill="both", expand=True, pady=(0, 10))
         right_results = ttk.LabelFrame(results_grid, text="Thumbnail B Breakdown", padding=12, style="Card.TLabelframe")
-        right_results.pack(side="left", fill="both", expand=True, padx=(8, 0))
+        right_results.pack(fill="both", expand=True)
 
         self.probability_text_a = tk.Text(
             left_results,
             height=12,
             width=46,
             state="disabled",
-            bg="#fff8f8",
-            fg="#5a1d26",
-            insertbackground="#5a1d26",
+            bg="#0f0f0f",
+            fg="#f3f3f3",
+            insertbackground="#f3f3f3",
             relief="flat",
             highlightthickness=1,
-            highlightbackground="#f0c8cd",
+            highlightbackground="#343434",
             font=("Cascadia Code", 10),
             padx=12,
             pady=12,
@@ -797,12 +788,12 @@ class ThumbnailPredictionGUI:
             height=12,
             width=46,
             state="disabled",
-            bg="#fff8f8",
-            fg="#5a1d26",
-            insertbackground="#5a1d26",
+            bg="#0f0f0f",
+            fg="#f3f3f3",
+            insertbackground="#f3f3f3",
             relief="flat",
             highlightthickness=1,
-            highlightbackground="#f0c8cd",
+            highlightbackground="#343434",
             font=("Cascadia Code", 10),
             padx=12,
             pady=12,
@@ -894,12 +885,14 @@ class ThumbnailPredictionGUI:
             return
 
         self.verdict_var.set(
-            "Estimated views and bins: "
-            f"Thumbnail A = {prediction_a.predicted_views:.2f} views, bin {prediction_a.predicted_class} ({prediction_a.predicted_label}); "
-            f"Thumbnail B = {prediction_b.predicted_views:.2f} views, bin {prediction_b.predicted_class} ({prediction_b.predicted_label})"
+            "Predicted bins and relative scores: "
+            f"Thumbnail A = score {prediction_a.predicted_normalized_performance:.6f}, "
+            f"bin {prediction_a.predicted_class} ({prediction_a.predicted_label}); "
+            f"Thumbnail B = score {prediction_b.predicted_normalized_performance:.6f}, "
+            f"bin {prediction_b.predicted_class} ({prediction_b.predicted_label})"
         )
         self.abtest_var.set(
-            f"{abtest_message}  Estimated views A = {score_a:.2f}, Estimated views B = {score_b:.2f}"
+            f"{abtest_message}  Score A = {score_a:.6f}, Score B = {score_b:.6f}"
         )
         self.note_var.set(prediction_a.note)
 
@@ -1047,8 +1040,8 @@ def main() -> None:
             abtest_message, score_a, score_b = compare_thumbnail_predictions(prediction, prediction_b)
             print("\nA/B test verdict:")
             print(f"  {abtest_message}")
-            print(f"  Estimated views A: {score_a:.2f}")
-            print(f"  Estimated views B: {score_b:.2f}")
+            print(f"  Relative score A: {score_a:.6f}")
+            print(f"  Relative score B: {score_b:.6f}")
         return
 
     app = ThumbnailPredictionGUI(args)
