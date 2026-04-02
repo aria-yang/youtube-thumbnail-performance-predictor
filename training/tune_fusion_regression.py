@@ -1,21 +1,3 @@
-import argparse
-import itertools
-import json
-import os
-import random
-import sys
-from pathlib import Path
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-import numpy as np
-import pandas as pd
-import torch
-from torch.utils.data import DataLoader, Subset, TensorDataset
-
-from thumbnail_performance.config import DATA_DIR, PROCESSED_DATA_DIR
-from thumbnail_performance.dataset import read_csv_with_fallback
-from thumbnail_performance.modeling.fusion_mlp import FusionMLP
 from training.train_fusion_regression import (
     DEFAULT_CSV_PATH,
     DEFAULT_FACE_PATH,
@@ -28,6 +10,22 @@ from training.train_fusion_regression import (
     sync_artifacts_to_root,
     train_regression,
 )
+from thumbnail_performance.modeling.fusion_mlp import FusionMLP
+from thumbnail_performance.dataset import read_csv_with_fallback
+from thumbnail_performance.config import DATA_DIR, PROCESSED_DATA_DIR
+from torch.utils.data import DataLoader, Subset, TensorDataset
+import torch
+import pandas as pd
+import numpy as np
+import argparse
+import itertools
+import json
+import os
+import random
+import sys
+from pathlib import Path
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 
 def parse_csv_list(value: str, cast):

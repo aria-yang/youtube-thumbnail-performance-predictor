@@ -190,11 +190,11 @@ def main() -> None:
     model.load_state_dict(state_dict)
     model.eval()
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Cross-Split Generalization Evaluation (Regression)")
     print(f"Checkpoint: {args.checkpoint_path.name}")
     print(f"Device: {device}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     results = []
     for split_name in args.splits:
@@ -218,7 +218,7 @@ def main() -> None:
     table_path = args.output_dir / "cross_split_regression.csv"
     table.to_csv(table_path, index=False)
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("Cross-Split Regression Results:")
     print(table.to_string(index=False))
     print(f"\nSaved table -> {table_path}")

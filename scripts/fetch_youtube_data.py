@@ -69,16 +69,16 @@ from tqdm import tqdm
 # Paths — edit if your project layout differs
 # ---------------------------------------------------------------------------
 
-DATA_DIR        = Path("data")
-RAW_DIR         = DATA_DIR / "raw"
-THUMB_DIR       = DATA_DIR / "thumbnails"
+DATA_DIR = Path("data")
+RAW_DIR = DATA_DIR / "raw"
+THUMB_DIR = DATA_DIR / "thumbnails"
 
-EXISTING_CSV    = RAW_DIR / "data.csv"
-NEW_CSV         = RAW_DIR / "new_data.csv"
-MERGED_CSV      = RAW_DIR / "merged_data.csv"
+EXISTING_CSV = RAW_DIR / "data.csv"
+NEW_CSV = RAW_DIR / "new_data.csv"
+MERGED_CSV = RAW_DIR / "merged_data.csv"
 
 EXISTING_THUMBS = THUMB_DIR / "images"
-NEW_THUMBS      = THUMB_DIR / "new_images"
+NEW_THUMBS = THUMB_DIR / "new_images"
 
 BASE_URL = "https://www.googleapis.com/youtube/v3"
 
@@ -124,18 +124,18 @@ def get_channel_info(api_key: str, channel_id: str) -> dict:
     item = items[0]
     n = int(item["statistics"].get("subscriberCount", 0))
     if n >= 1_000_000_000:
-        sub_str = f"{n/1e9:.2f}B subscribers"
+        sub_str = f"{n / 1e9:.2f}B subscribers"
     elif n >= 1_000_000:
-        sub_str = f"{n/1e6:.2f}M subscribers"
+        sub_str = f"{n / 1e6:.2f}M subscribers"
     elif n >= 1_000:
-        sub_str = f"{n/1e3:.2f}K subscribers"
+        sub_str = f"{n / 1e3:.2f}K subscribers"
     else:
         sub_str = f"{n} subscribers"
 
     return {
-        "playlist_id":    item["contentDetails"]["relatedPlaylists"]["uploads"],
+        "playlist_id": item["contentDetails"]["relatedPlaylists"]["uploads"],
         "subscriber_str": sub_str,
-        "channel_name":   item["snippet"]["title"],
+        "channel_name": item["snippet"]["title"],
     }
 
 
@@ -190,11 +190,11 @@ def format_duration(iso_duration: str) -> str:
 def format_views(n: int) -> str:
     """158000000 -> '158.0M views' to match existing CSV format."""
     if n >= 1_000_000_000:
-        return f"{n/1e9:.1f}B views"
+        return f"{n / 1e9:.1f}B views"
     elif n >= 1_000_000:
-        return f"{n/1e6:.1f}M views"
+        return f"{n / 1e6:.1f}M views"
     elif n >= 1_000:
-        return f"{n/1e3:.1f}K views"
+        return f"{n / 1e3:.1f}K views"
     return f"{n} views"
 
 
@@ -209,25 +209,25 @@ def get_video_details(api_key: str, video_ids: list[str], subscriber_str: str) -
     rows = []
     for item in resp.json().get("items", []):
         snippet = item.get("snippet", {})
-        stats   = item.get("statistics", {})
+        stats = item.get("statistics", {})
         content = item.get("contentDetails", {})
-        thumbs  = snippet.get("thumbnails", {})
+        thumbs = snippet.get("thumbnails", {})
 
         thumb_url = (
             thumbs.get("maxres") or thumbs.get("high") or thumbs.get("medium") or {}
         ).get("url", "")
 
         rows.append({
-            "video_id":       item["id"],
-            "channel_name":   snippet.get("channelTitle", ""),
+            "video_id": item["id"],
+            "channel_name": snippet.get("channelTitle", ""),
             "subscriber_str": subscriber_str,
-            "title":          snippet.get("title", ""),
-            "published_at":   snippet.get("publishedAt", "")[:10],
-            "view_count":     int(stats.get("viewCount", 0)),
-            "views_str":      format_views(int(stats.get("viewCount", 0))),
-            "category":       CATEGORY_MAP.get(snippet.get("categoryId", ""), "Entertainment"),
-            "duration":       format_duration(content.get("duration", "")),
-            "thumbnail_url":  thumb_url,
+            "title": snippet.get("title", ""),
+            "published_at": snippet.get("publishedAt", "")[:10],
+            "view_count": int(stats.get("viewCount", 0)),
+            "views_str": format_views(int(stats.get("viewCount", 0))),
+            "category": CATEGORY_MAP.get(snippet.get("categoryId", ""), "Entertainment"),
+            "duration": format_duration(content.get("duration", "")),
+            "thumbnail_url": thumb_url,
         })
     return rows
 
@@ -282,7 +282,7 @@ def scrape(api_key: str, channel_handles: list[str], max_per_channel: int, skip:
             continue
 
         video_ids = get_video_ids(api_key, info["playlist_id"], max_per_channel, skip=skip)
-        new_ids   = [v for v in video_ids if v not in existing_ids]
+        new_ids = [v for v in video_ids if v not in existing_ids]
 
         if not new_ids:
             logger.info("  No new videos, skipping.")
@@ -291,7 +291,7 @@ def scrape(api_key: str, channel_handles: list[str], max_per_channel: int, skip:
         logger.info(f"  {len(new_ids)} new videos found")
 
         for i in range(0, len(new_ids), 50):
-            batch   = new_ids[i:i+50]
+            batch = new_ids[i:i + 50]
             details = get_video_details(api_key, batch, info["subscriber_str"])
 
             for d in details:
@@ -300,15 +300,15 @@ def scrape(api_key: str, channel_handles: list[str], max_per_channel: int, skip:
 
                 # Columns match data.csv exactly
                 all_rows.append({
-                    "Id":          d["video_id"],
-                    "Channel":     d["channel_name"],
+                    "Id": d["video_id"],
+                    "Channel": d["channel_name"],
                     "Subscribers": d["subscriber_str"],
-                    "Title":       d["title"],
-                    "URL":         f"https://www.youtube.com/watch?v={d['video_id']}",
-                    "Released":    d["published_at"],
-                    "Views":       d["views_str"],
-                    "Category":    d["category"],
-                    "Length":      d["duration"],
+                    "Title": d["title"],
+                    "URL": f"https://www.youtube.com/watch?v={d['video_id']}",
+                    "Released": d["published_at"],
+                    "Views": d["views_str"],
+                    "Category": d["category"],
+                    "Length": d["duration"],
                 })
                 existing_ids.add(d["video_id"])
 
@@ -323,7 +323,7 @@ def scrape(api_key: str, channel_handles: list[str], max_per_channel: int, skip:
     new_df = pd.DataFrame(all_rows)
     new_df.to_csv(NEW_CSV, index=False)
 
-    logger.success(f"\n{'='*50}")
+    logger.success(f"\n{'=' * 50}")
     logger.success(f"Saved {len(new_df)} new rows  ->  {NEW_CSV}")
     logger.success(f"Thumbnails saved             ->  {NEW_THUMBS}/")
     logger.info("\nNext steps:")
@@ -347,9 +347,9 @@ def merge():
         logger.error(f"Missing {NEW_CSV} — run scrape step first.")
         return
 
-    old_df  = pd.read_csv(EXISTING_CSV)
-    new_df  = pd.read_csv(NEW_CSV)
-    merged  = pd.concat([old_df, new_df], ignore_index=True).drop_duplicates(subset=["Id"])
+    old_df = pd.read_csv(EXISTING_CSV)
+    new_df = pd.read_csv(NEW_CSV)
+    merged = pd.concat([old_df, new_df], ignore_index=True).drop_duplicates(subset=["Id"])
     merged.to_csv(MERGED_CSV, index=False)
 
     logger.success(f"Merged: {len(old_df)} existing + {len(new_df)} new = {len(merged)} total")
@@ -369,15 +369,15 @@ def merge():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="YouTube thumbnail scraper")
-    parser.add_argument("--api_key",         type=str, default=None,
+    parser.add_argument("--api_key", type=str, default=None,
                         help="YouTube Data API v3 key (required unless --merge)")
-    parser.add_argument("--channels_file",   type=str, default="channels.txt",
+    parser.add_argument("--channels_file", type=str, default="channels.txt",
                         help="Path to text file with one channel handle per line")
     parser.add_argument("--max_per_channel", type=int, default=50,
                         help="Max videos to pull per channel (default: 50)")
-    parser.add_argument("--skip",            type=int, default=0,
+    parser.add_argument("--skip", type=int, default=0,
                         help="Number of most recent videos to skip per channel. Use 50 on day 2, 100 on day 3, etc.")
-    parser.add_argument("--merge",           action="store_true",
+    parser.add_argument("--merge", action="store_true",
                         help="Skip scraping, just merge existing + new CSVs")
     args = parser.parse_args()
 

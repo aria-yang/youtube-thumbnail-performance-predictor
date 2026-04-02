@@ -11,6 +11,7 @@ from thumbnail_performance.baselines import (
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def dummy_data():
     """Small synthetic dataset with 5 classes matching project labels (0-4)."""
@@ -24,6 +25,7 @@ def dummy_data():
     y_test = rng.integers(0, n_classes, n_test)
 
     return X_train, y_train, X_test, y_test
+
 
 def test_random_baseline_metrics(dummy_data):
     X_train, y_train, X_test, y_test = dummy_data

@@ -10,6 +10,20 @@ Outputs:
   - Bar chart comparing AUROC across splits
 """
 
+from training.train_fusion import (
+    compute_auroc,
+    compute_macro_f1,
+    load_saved_split_ids,
+    restore_artifacts,
+)
+from thumbnail_performance.modeling.fusion_mlp import FusionMLP
+from thumbnail_performance.dataset import ThumbnailDataset, read_csv_with_fallback
+from thumbnail_performance.config import DATA_DIR, MODELS_DIR, PROCESSED_DATA_DIR
+from torch.utils.data import DataLoader, Subset
+import torch
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 import argparse
 import json
 import os
@@ -17,22 +31,6 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import torch
-from torch.utils.data import DataLoader, Subset
-
-from thumbnail_performance.config import DATA_DIR, MODELS_DIR, PROCESSED_DATA_DIR
-from thumbnail_performance.dataset import ThumbnailDataset, read_csv_with_fallback
-from thumbnail_performance.modeling.fusion_mlp import FusionMLP
-from training.train_fusion import (
-    compute_auroc,
-    compute_macro_f1,
-    load_saved_split_ids,
-    restore_artifacts,
-)
 
 
 DEFAULT_CSV_PATH = PROCESSED_DATA_DIR / "merged_labeled_data.csv"
@@ -213,11 +211,11 @@ def main() -> None:
     model.eval()
 
     # Evaluate on each split
-    print(f"\n{'='*55}")
+    print(f"\n{'=' * 55}")
     print(f"Cross-Split Generalization Evaluation")
     print(f"Checkpoint: {args.checkpoint_path.name}")
     print(f"Device: {device}")
-    print(f"{'='*55}")
+    print(f"{'=' * 55}")
 
     results = []
     for split_name in args.splits:
@@ -242,7 +240,7 @@ def main() -> None:
     table_path = args.output_dir / "cross_split_generalization.csv"
     table.to_csv(table_path, index=False)
 
-    print(f"\n{'='*55}")
+    print(f"\n{'=' * 55}")
     print("Cross-Split Results Table:")
     print(table.to_string(index=False))
     print(f"\nSaved table -> {table_path}")
