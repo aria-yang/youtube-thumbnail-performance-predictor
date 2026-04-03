@@ -1,3 +1,16 @@
+from utils.class_weights import compute_class_weights
+from thumbnail_performance.dataset import read_csv_with_fallback
+from thumbnail_performance.config import DATA_DIR, MODELS_DIR, PROCESSED_DATA_DIR, RAW_DATA_DIR
+from PIL import Image
+from torchvision import models, transforms
+from torch.utils.data import DataLoader, Dataset
+from sklearn.preprocessing import label_binarize
+from sklearn.metrics import f1_score, roc_auc_score
+import torch.optim as optim
+import torch.nn as nn
+import torch
+import pandas as pd
+import numpy as np
 import argparse
 import csv
 import os
@@ -6,21 +19,6 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-import numpy as np
-import pandas as pd
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from sklearn.metrics import f1_score, roc_auc_score
-from sklearn.preprocessing import label_binarize
-from torch.utils.data import DataLoader, Dataset
-from torchvision import models, transforms
-from PIL import Image
-
-from thumbnail_performance.config import DATA_DIR, MODELS_DIR, PROCESSED_DATA_DIR, RAW_DATA_DIR
-from thumbnail_performance.dataset import read_csv_with_fallback
-from utils.class_weights import compute_class_weights
 
 
 IMAGE_TRANSFORM = transforms.Compose(
@@ -508,8 +506,7 @@ def main():
 
     print(
         f"Using saved split '{args.split_name}': "
-        f"train={len(train_df)}, val={len(val_df)}, test={len(test_df)}"
-    , flush=True)
+        f"train={len(train_df)}, val={len(val_df)}, test={len(test_df)}", flush=True)
 
     print("Building PyTorch datasets...", flush=True)
     train_ds = ThumbnailFineTuneDataset(train_df, IMAGE_TRANSFORM)
@@ -593,8 +590,7 @@ def main():
             f"Epoch {epoch:02d} | train_loss={train_loss:.4f} | "
             f"val_loss={val_metrics['loss']:.4f} | "
             f"val_macro_auroc={val_metrics['macro_auroc']:.4f} | "
-            f"val_macro_f1={val_metrics['macro_f1']:.4f}"
-        , flush=True)
+            f"val_macro_f1={val_metrics['macro_f1']:.4f}", flush=True)
 
         if val_metrics["macro_auroc"] > best_val_auroc:
             best_val_auroc = val_metrics["macro_auroc"]
@@ -609,8 +605,7 @@ def main():
     print(
         f"Test metrics | loss={test_metrics['loss']:.4f} | "
         f"macro_auroc={test_metrics['macro_auroc']:.4f} | "
-        f"macro_f1={test_metrics['macro_f1']:.4f}"
-    , flush=True)
+        f"macro_f1={test_metrics['macro_f1']:.4f}", flush=True)
 
     save_history_csv(history, args.history_path)
     print(f"Saved training history to {args.history_path}", flush=True)

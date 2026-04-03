@@ -1,22 +1,3 @@
-import argparse
-import importlib
-import json
-import os
-import sys
-from pathlib import Path
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, Subset
-
-from thumbnail_performance.config import DATA_DIR, MODELS_DIR, PROCESSED_DATA_DIR
-from thumbnail_performance.dataset import ThumbnailDataset, read_csv_with_fallback
-from thumbnail_performance.modeling.fusion_mlp import FusionMLP
 from training.train_fusion_regression import (
     DEFAULT_CSV_PATH,
     DEFAULT_FACE_PATH,
@@ -27,6 +8,23 @@ from training.train_fusion_regression import (
     set_seed,
     train_regression,
 )
+from thumbnail_performance.modeling.fusion_mlp import FusionMLP
+from thumbnail_performance.dataset import ThumbnailDataset, read_csv_with_fallback
+from thumbnail_performance.config import DATA_DIR, MODELS_DIR, PROCESSED_DATA_DIR
+from torch.utils.data import DataLoader, Subset
+import torch.nn as nn
+import torch
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import argparse
+import importlib
+import json
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 
 TEXT_FEATURE_NAMES = [
@@ -113,7 +111,7 @@ class ConcatenatedFusionWrapper(nn.Module):
         text_start = self.cnn_dim
         text_end = text_start + self.text_dim
         text_feat = x[:, text_start:text_end]
-        face_feat = x[:, text_end : text_end + self.face_dim]
+        face_feat = x[:, text_end: text_end + self.face_dim]
         return self.model(cnn_feat, text_feat, face_feat)
 
 

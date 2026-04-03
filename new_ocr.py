@@ -26,12 +26,13 @@ reader = easyocr.Reader(['en'], gpu=False, verbose=False)
 
 # ── 2. Preprocessing helpers ─────────────────────────────────────────────────
 
+
 def preprocess_image(img_path: str) -> np.ndarray:
     """
     Light preprocessing to improve OCR accuracy on thumbnails:
       - Upscale small images (OCR degrades below ~300px width)
       - Convert to RGB (handles PNGs with alpha channels)
-    
+
     Reference: EasyOCR docs recommend at least 32px text height.
     https://github.com/JaidedAI/EasyOCR#tips-for-better-accuracy
     """
@@ -50,7 +51,7 @@ def clean_ocr_text(raw_results: list) -> str:
       - Filter low-confidence detections (threshold = 0.4)
       - Strip non-printable characters
       - Collapse extra whitespace
-    
+
     Confidence filtering reference:
     https://www.jaided.ai/easyocr/documentation/
     """
@@ -168,14 +169,14 @@ def build_ocr_feature_dataframe(
 def demo_single_image(img_path: str):
     """Print OCR features for one image — useful for debugging."""
     features = extract_ocr_features(img_path)
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print(f"Thumbnail : {img_path}")
     print(f"Raw text  : {features['raw_text']!r}")
     print(f"Words     : {features['word_count']}")
     print(f"CAPS %    : {features['capital_letter_pct']:.1%}")
     print(f"Numeric   : {'Yes' if features['has_numeric'] else 'No'}")
     print(f"Char count: {features['char_count']}")
-    print('='*50)
+    print('=' * 50)
 
 
 # ── 6. Entry point ────────────────────────────────────────────────────────────
