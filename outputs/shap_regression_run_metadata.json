@@ -1,0 +1,9 @@
+{
+  "split_name": "random",
+  "target_column": "normalized_performance",
+  "target_transform": "log1p",
+  "loss": "mse",
+  "seed": 42,
+  "background_size": 128,
+  "explain_size": 256
+}

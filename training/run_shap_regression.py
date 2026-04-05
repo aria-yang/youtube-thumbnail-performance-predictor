@@ -166,11 +166,18 @@ def save_global_importance_plot(
     max_display: int,
 ) -> None:
     top_importance = ranked_importance.head(max_display).iloc[::-1]
-    plt.figure(figsize=(10, max(6, 0.35 * len(top_importance))))
-    plt.barh(top_importance["feature"], top_importance["mean_abs_shap"], color="#2ca02c")
-    plt.xlabel("Mean |SHAP value|")
-    plt.ylabel("Feature")
-    plt.title("Global SHAP Feature Importance for Regression Fusion MLP")
+    plt.figure(figsize=(10, max(6, 0.5 * len(top_importance))))
+    plt.barh(
+        top_importance["feature"],
+        top_importance["mean_abs_shap"],
+        color="#1f77b4",
+        height=0.45,
+    )
+    plt.xlabel("Mean |SHAP value|", fontsize=14)
+    plt.ylabel("Feature", fontsize=14)
+    plt.title("Global SHAP Feature Importance for Regression Fusion MLP", fontsize=16)
+    plt.xticks(fontsize=12)
+    plt.yticks(fontsize=13)
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
     plt.close()
@@ -229,7 +236,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dropout", type=float, default=0.4)
     parser.add_argument("--background_size", type=int, default=128)
     parser.add_argument("--explain_size", type=int, default=256)
-    parser.add_argument("--plot_top_k", type=int, default=20)
+    parser.add_argument("--plot_top_k", type=int, default=7)
     parser.add_argument(
         "--checkpoint_path",
         type=Path,
@@ -367,13 +374,13 @@ def main() -> None:
     ranked_importance = rank_global_importance(shap_values, feature_names)
 
     all_features_path = args.output_dir / "shap_regression_feature_importance.csv"
-    top10_path = args.output_dir / "shap_regression_top10_features.csv"
+    top7_path = args.output_dir / "shap_regression_top7_features.csv"
     plot_path = args.output_dir / "shap_regression_global_importance.png"
     notes_path = args.output_dir / "shap_regression_notes.md"
     meta_path = args.output_dir / "shap_regression_run_metadata.json"
 
     ranked_importance.to_csv(all_features_path, index=False)
-    ranked_importance.head(10).to_csv(top10_path, index=False)
+    ranked_importance.head(7).to_csv(top7_path, index=False)
     save_global_importance_plot(ranked_importance, plot_path, args.plot_top_k)
     save_interpretation_notes(notes_path)
     meta_path.write_text(
@@ -393,11 +400,11 @@ def main() -> None:
 
     print(f"Saved global SHAP plot to {plot_path}")
     print(f"Saved full feature ranking to {all_features_path}")
-    print(f"Saved top 10 features to {top10_path}")
+    print(f"Saved top 7 features to {top7_path}")
     print(f"Saved interpretation notes to {notes_path}")
     print(f"Saved run metadata to {meta_path}")
-    print("\nTop 10 features:")
-    print(ranked_importance.head(10).to_string(index=False))
+    print("\nTop 7 features:")
+    print(ranked_importance.head(7).to_string(index=False))
 
 
 if __name__ == "__main__":
