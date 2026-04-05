@@ -64,9 +64,24 @@ Expected files include:
 - `fusion_mlp_regression_final_seed42.pt`
 - `fusion_mlp_regression_final_seed42_metrics.json`
 
-For Colab / notebook runs, copy these files into:
+For Colab / notebook runs:
 
-- `/content/drive/MyDrive/youtube-thumbnail-performance-predictor-artifacts/`
+1. Download the shared artifact folder as a single `.zip` file.
+2. Open the notebook in Colab.
+3. Upload that zip file in the first artifact cell.
+4. Use the upload-and-extract cells already included at the top of the notebooks.
+
+Those notebook cells automatically unpack the zip into:
+
+- `data/processed/`
+- `data/splits/`
+- `models/`
+
+So the notebooks can run without using Google Drive at all.
+
+Optional alternative:
+
+- copy the files into `/content/drive/MyDrive/youtube-thumbnail-performance-predictor-artifacts/` and adapt the notebook cells if you prefer a Drive-backed workflow
 
 ### 4. Run the final regression workflow
 
