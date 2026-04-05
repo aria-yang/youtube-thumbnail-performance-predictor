@@ -27,6 +27,11 @@ from training.train_fusion_regression import (
     set_seed,
 )
 
+OUTPUTS_DIR = Path("outputs")
+OUTPUTS_FIGURES_DIR = OUTPUTS_DIR / "figures"
+OUTPUTS_TABLES_DIR = OUTPUTS_DIR / "tables"
+OUTPUTS_METRICS_DIR = OUTPUTS_DIR / "metrics"
+
 
 def resolve_matching_cnn_path(explicit_path: Path | None, csv_path: Path) -> Path:
     expected_rows = len(read_csv_with_fallback(csv_path))
@@ -226,17 +231,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output_path",
         type=Path,
-        default=PROCESSED_DATA_DIR / "figure3_regression_predictions_vs_ground_truth.png",
+        default=OUTPUTS_FIGURES_DIR / "figure3_regression_predictions_vs_ground_truth.png",
     )
     parser.add_argument(
         "--predictions_csv_path",
         type=Path,
-        default=PROCESSED_DATA_DIR / "figure3_regression_predictions_vs_ground_truth.csv",
+        default=OUTPUTS_TABLES_DIR / "figure3_regression_predictions_vs_ground_truth.csv",
     )
     parser.add_argument(
         "--metrics_json_path",
         type=Path,
-        default=PROCESSED_DATA_DIR / "figure3_regression_predictions_vs_ground_truth_metrics.json",
+        default=OUTPUTS_METRICS_DIR / "figure3_regression_predictions_vs_ground_truth_metrics.json",
     )
     parser.add_argument(
         "--display_metrics_from",

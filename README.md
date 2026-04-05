@@ -25,6 +25,8 @@ The prediction target is `normalized_performance = views / subscriber_count`.
   Raw data, processed artifacts, and saved split files
 - `models/`
   Saved checkpoints
+- `outputs/`
+  Final report artifacts organized into `figures/`, `tables/`, and `metrics/`
 
 ## Minimal Reproduction
 
@@ -39,7 +41,34 @@ conda activate youtube-thumbnail-performance-predictor
 
 The fastest way to reproduce the final project is to use the processed data and checkpoints already in the repo.
 
-### 3. Run the final regression workflow
+### 3. Download large artifacts
+
+Some processed feature files were too large for GitHub and are distributed separately through a shared Google Drive folder.
+
+Public artifact folder:
+
+- `https://drive.google.com/drive/folders/178JL0JCOksFKrN57nI6LDXIswCRFsHNs?usp=sharing`
+
+Expected files include:
+
+- `merged_labeled_data.csv`
+- `merged_text_embeddings.npy`
+- `merged_face_embeddings.npy`
+- `merged_cnn_embeddings_resnet50.npy`
+- `merged_cnn_cache_resnet50.csv`
+- `merged_face_cache.csv`
+- `merged_ocr_features.csv`
+- `random_train.csv`
+- `random_val.csv`
+- `random_test.csv`
+- `fusion_mlp_regression_final_seed42.pt`
+- `fusion_mlp_regression_final_seed42_metrics.json`
+
+For Colab / notebook runs, copy these files into:
+
+- `/content/drive/MyDrive/youtube-thumbnail-performance-predictor-artifacts/`
+
+### 4. Run the final regression workflow
 
 For GPU-backed training and final experiments, use:
 
@@ -53,7 +82,7 @@ This notebook covers:
 - SHAP analysis
 - cross-split evaluation
 
-### 4. Run the final demo / inference tool
+### 5. Run the final demo / inference tool
 
 GUI:
 
@@ -90,6 +119,17 @@ python thumbnail_performance/face_emotion_detection.py --csv_path data/processed
 - `training/eval_crosssplit.py`
 - `training/eval_crosssplit_regression.py`
 - `training/plot_regression_predictions.py`
+
+## Outputs
+
+Final generated results are organized as:
+
+- `outputs/figures/`
+  Final plots used in the report, including Figure 3 and SHAP / ablation figures
+- `outputs/tables/`
+  Final CSV tables used in the report
+- `outputs/metrics/`
+  Small JSON metric summaries for generated figures
 
 ## Notes
 

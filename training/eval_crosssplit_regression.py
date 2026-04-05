@@ -131,7 +131,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--artifact_root",
         type=Path,
-        default=Path("/content/drive/MyDrive/ECE324/youtube-thumbnail-performance-predictor-artifacts"),
+        default=Path("/content/drive/MyDrive/youtube-thumbnail-performance-predictor-artifacts"),
     )
     return parser.parse_args()
 

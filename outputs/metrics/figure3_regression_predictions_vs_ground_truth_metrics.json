@@ -1,0 +1,26 @@
+{
+  "split_name": "random",
+  "split_part": "test",
+  "checkpoint_path": "C:\\Users\\ariay\\OneDrive\\Desktop\\ECE324\\Project\\youtube-thumbnail-performance-predictor\\models\\fusion_mlp_regression_final_seed42.pt",
+  "target_mode": "log1p",
+  "num_examples": 891,
+  "metrics_on_raw_normalized_performance": {
+    "mae": 0.6981878866138308,
+    "rmse": 2.4481623736550446,
+    "r2": 0.1871191178869156,
+    "spearman": 0.816108697638093
+  },
+  "metrics_on_target_transform_scale": {
+    "mae": 0.22090357594653384,
+    "rmse": 0.3622724724927881,
+    "r2": 0.6162497165120735,
+    "spearman": 0.816108697638093
+  },
+  "display_metrics_source": "transformed",
+  "display_metrics": {
+    "mae": 0.22090357594653384,
+    "rmse": 0.3622724724927881,
+    "r2": 0.6162497165120735,
+    "spearman": 0.816108697638093
+  }
+}
