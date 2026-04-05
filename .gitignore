@@ -1,5 +1,6 @@
 # Mac OS-specific storage files
 .DS_Store
+.vscode/
 
 # vim
 *.swp
@@ -198,6 +199,9 @@ data/processed/merged_title_embedding_cache.csv
 data/processed/merged_labeled_data.csv
 data/processed/new_labeled_data.csv
 data/processed/fusion_regression_tuning_summary.json
+data/processed/figure3_regression_predictions_vs_ground_truth.csv
+data/processed/figure3_regression_predictions_vs_ground_truth.png
+data/processed/figure3_regression_predictions_vs_ground_truth_metrics.json
 
 # Imported model artifacts
 models/fusion_mlp.pt
