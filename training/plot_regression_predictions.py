@@ -131,7 +131,7 @@ def plot_predictions(
     lo = max(0.0, min_val - padding)
     hi = max_val + padding
 
-    fig, ax_main = plt.subplots(figsize=(7.3, 6.4))
+    fig, ax_main = plt.subplots(figsize=(7.6, 6.7))
 
     ax_main.scatter(
         x_plot,
@@ -152,9 +152,10 @@ def plot_predictions(
     axis_label_suffix = " (log1p scale)" if use_log1p_axes else ""
     ax_main.set_xlim(lo, hi)
     ax_main.set_ylim(lo, hi)
-    ax_main.set_xlabel(f"True normalized performance{axis_label_suffix}", fontsize=12)
-    ax_main.set_ylabel(f"Predicted normalized performance{axis_label_suffix}", fontsize=12)
-    ax_main.set_title("Regression Predictions vs Ground Truth", fontsize=13, fontweight="bold")
+    ax_main.set_xlabel(f"True normalized performance{axis_label_suffix}", fontsize=14)
+    ax_main.set_ylabel(f"Predicted normalized performance{axis_label_suffix}", fontsize=14)
+    ax_main.set_title("Regression Predictions vs Ground Truth", fontsize=16, fontweight="bold")
+    ax_main.tick_params(axis="both", labelsize=12)
 
     ax_main.legend(loc="lower right", frameon=True, framealpha=0.92, fontsize=9)
 
@@ -166,7 +167,7 @@ def plot_predictions(
             transform=ax_main.transAxes,
             va="bottom",
             ha="right",
-            fontsize=9,
+            fontsize=11,
             color="#555555",
         )
 

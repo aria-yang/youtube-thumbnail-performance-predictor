@@ -1,7 +1,7 @@
 {
   "split_name": "random",
   "split_part": "test",
-  "checkpoint_path": "C:\\Users\\ariay\\OneDrive\\Desktop\\ECE324\\Project\\youtube-thumbnail-performance-predictor\\models\\fusion_mlp_regression_final_seed42.pt",
+  "checkpoint_path": "models\\fusion_mlp_regression_final_seed42.pt",
   "target_mode": "log1p",
   "num_examples": 891,
   "metrics_on_raw_normalized_performance": {
