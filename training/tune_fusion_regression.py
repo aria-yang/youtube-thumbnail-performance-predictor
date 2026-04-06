@@ -131,11 +131,13 @@ def rank_and_save_results(
         "val_mae",
         "val_rmse",
         "val_r2",
+        "val_kendall",
         "val_spearman",
         "test_loss",
         "test_mae",
         "test_rmse",
         "test_r2",
+        "test_kendall",
         "test_spearman",
     ]
 
@@ -239,17 +241,19 @@ def main() -> None:
     parser.add_argument(
         "--metric_to_rank",
         type=str,
-        default="val_spearman",
+        default="val_kendall",
         choices=[
             "val_loss",
             "val_mae",
             "val_rmse",
             "val_r2",
+            "val_kendall",
             "val_spearman",
             "test_loss",
             "test_mae",
             "test_rmse",
             "test_r2",
+            "test_kendall",
             "test_spearman",
         ],
         help="Metric used to rank configurations in the summary.",
@@ -418,11 +422,13 @@ def main() -> None:
                         "val_mae": val_metrics["mae"],
                         "val_rmse": val_metrics["rmse"],
                         "val_r2": val_metrics["r2"],
+                        "val_kendall": val_metrics["kendall"],
                         "val_spearman": val_metrics["spearman"],
                         "test_loss": test_loss,
                         "test_mae": test_metrics["mae"],
                         "test_rmse": test_metrics["rmse"],
                         "test_r2": test_metrics["r2"],
+                        "test_kendall": test_metrics["kendall"],
                         "test_spearman": test_metrics["spearman"],
                     }
                 )

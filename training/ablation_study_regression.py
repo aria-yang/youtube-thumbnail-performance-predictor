@@ -161,13 +161,16 @@ def run_ablation_experiment(args: argparse.Namespace) -> pd.DataFrame:
                     "test_mae": test_metrics["mae"],
                     "test_rmse": test_metrics["rmse"],
                     "test_r2": test_metrics["r2"],
+                    "test_kendall": test_metrics["kendall"],
                     "test_spearman": test_metrics["spearman"],
                 }
             )
             logger.info(
                 f"--> {config['name']} | seed={seed} | "
                 f"MAE={test_metrics['mae']:.4f} | RMSE={test_metrics['rmse']:.4f} | "
-                f"R2={test_metrics['r2']:.4f} | Spearman={test_metrics['spearman']:.4f}"
+                f"R2={test_metrics['r2']:.4f} | "
+                f"Kendall={test_metrics['kendall']:.4f} | "
+                f"Spearman={test_metrics['spearman']:.4f}"
             )
 
     return pd.DataFrame(results)
@@ -181,7 +184,9 @@ def generate_ablation_outputs(
     output_dir.mkdir(exist_ok=True, parents=True)
 
     summary = (
-        df_results.groupby("model")[["test_mae", "test_rmse", "test_r2", "test_spearman"]]
+        df_results.groupby("model")[
+            ["test_mae", "test_rmse", "test_r2", "test_kendall", "test_spearman"]
+        ]
         .agg(["mean", "std"])
         .reset_index()
     )
@@ -190,7 +195,7 @@ def generate_ablation_outputs(
     ]
     summary = summary.sort_values(
         f"{ranking_metric}_mean",
-        ascending=ranking_metric in {"test_r2", "test_spearman"},
+        ascending=ranking_metric in {"test_mae", "test_rmse"},
     ).reset_index(drop=True)
 
     summary_path = output_dir / "ablation_regression_summary.csv"
@@ -198,6 +203,15 @@ def generate_ablation_outputs(
     plot_path = output_dir / f"ablation_regression_{ranking_metric}.png"
     df_results.to_csv(raw_path, index=False)
     summary.to_csv(summary_path, index=False)
+
+    metric_labels = {
+        "test_mae": "Test MAE",
+        "test_rmse": "Test RMSE",
+        "test_r2": "Test R^2",
+        "test_kendall": "Test Kendall's Tau",
+        "test_spearman": "Test Spearman",
+    }
+    ranking_label = metric_labels.get(ranking_metric, ranking_metric.replace("_", " ").title())
 
     plot_order = ["CNN-only", "CNN + Text", "CNN + Face", "CNN + Text + Face"]
     plt.figure(figsize=(10, 6))
@@ -218,8 +232,8 @@ def generate_ablation_outputs(
         alpha=0.6,
         jitter=True,
     )
-    plt.title("Regression Multimodal Ablation Study", fontsize=14, pad=15)
-    plt.ylabel(ranking_metric.replace("_", " ").title(), fontsize=12)
+    plt.title(f"Regression Ablation Study: {ranking_label}", fontsize=14, pad=15)
+    plt.ylabel(ranking_label, fontsize=12)
     plt.xlabel("Modality Configuration", fontsize=12)
     plt.grid(axis="y", linestyle="--", alpha=0.7)
     plt.tight_layout()
@@ -255,8 +269,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ranking_metric",
         type=str,
-        default="test_spearman",
-        choices=["test_mae", "test_rmse", "test_r2", "test_spearman"],
+        default="test_kendall",
+        choices=["test_mae", "test_rmse", "test_r2", "test_kendall", "test_spearman"],
     )
     parser.add_argument("--output_dir", type=Path, default=Path("outputs"))
     parser.add_argument("--device", type=str, default="auto")
