@@ -8,6 +8,7 @@ The final workflow uses a multimodal regression model built from:
 - face and face-area features
 
 The prediction target is `normalized_performance = views / subscriber_count`.
+For regression evaluation, the primary ranking metric is Kendall's Tau, with Spearman also reported as a secondary metric.
 
 ## What Is In This Repo
 
@@ -97,6 +98,8 @@ This notebook covers:
 - SHAP analysis
 - cross-split evaluation
 
+The final report-facing regression results should be read primarily through Kendall's Tau, since the deployment use case is ranking thumbnails against one another for A/B comparison.
+
 ### 5. Run the final demo / inference tool
 
 GUI:
@@ -149,5 +152,7 @@ Final generated results are organized as:
 ## Notes
 
 - The final report should emphasize the regression workflow.
+- Kendall's Tau is the main ranking metric for regression, ablation, and cross-split evaluation.
+- Spearman is still kept in saved outputs for continuity with earlier experiments.
 - The classification pipeline is still included for comparison and ablation.
 - Heavy training was done in notebooks on GPU rather than from a local CPU-only setup.

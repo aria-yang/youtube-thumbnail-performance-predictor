@@ -283,6 +283,7 @@ def resolve_display_metrics(
         "mae": float(file_metrics["mae"]),
         "rmse": float(file_metrics["rmse"]),
         "r2": float(file_metrics["r2"]),
+        "kendall": float(file_metrics["kendall"]),
         "spearman": float(file_metrics["spearman"]),
     }
     return normalized_metrics, f"Metrics from {display_file.name}"

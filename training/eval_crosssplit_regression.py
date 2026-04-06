@@ -1,14 +1,17 @@
 """
-Prompt 11 — Cross-Split Generalization Evaluation (Regression Model)
-Evaluates the trained regression FusionMLP on all three splits:
-  - Random split
-  - Channel-heldout split
-  - Time-based split
+Cross-split generalization evaluation for the regression FusionMLP.
 
-Metrics: MAE, RMSE, R2, Spearman
-Outputs:
-  - Comparison table (CSV + printed)
-  - Bar chart comparing Spearman across splits
+Evaluates the trained model on:
+- random split
+- channel-heldout split
+- time-based split
+
+Metrics:
+- MAE
+- RMSE
+- R^2
+- Kendall's Tau
+- Spearman
 """
 
 import argparse
@@ -25,8 +28,8 @@ from thumbnail_performance.config import DATA_DIR, MODELS_DIR, PROCESSED_DATA_DI
 from thumbnail_performance.dataset import ThumbnailDataset, read_csv_with_fallback
 from thumbnail_performance.modeling.fusion_mlp import FusionMLP
 from training.train_fusion_regression import (
-    compute_regression_metrics,
     collect_predictions,
+    compute_regression_metrics,
     load_saved_split_ids,
     resolve_cnn_path,
     restore_artifacts,
@@ -74,36 +77,40 @@ def evaluate_split(
     print(
         f"  {split_name:12s} | n_test={len(test_indices):5d} | "
         f"MAE={metrics['mae']:.4f} | RMSE={metrics['rmse']:.4f} | "
-        f"R2={metrics['r2']:.4f} | Spearman={metrics['spearman']:.4f}"
+        f"R2={metrics['r2']:.4f} | Kendall={metrics['kendall']:.4f} | "
+        f"Spearman={metrics['spearman']:.4f}"
     )
     return {"split": split_name, "n_test": len(test_indices), **metrics}
 
 
 def plot_cross_split(results: list[dict], output_path: Path) -> None:
     splits = [r["split"] for r in results]
-    metrics = ["mae", "rmse", "r2", "spearman"]
-    colors = ["#F44336", "#FF9800", "#4CAF50", "#2196F3"]
-    labels = ["MAE", "RMSE", "R²", "Spearman"]
+    values = [r["kendall"] for r in results]
+    color = "#1976D2"
 
     x = np.arange(len(splits))
-    width = 0.2
+    width = 0.55
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    for i, (metric, color, label) in enumerate(zip(metrics, colors, labels)):
-        vals = [r[metric] for r in results]
-        bars = ax.bar(x + i * width, vals, width, label=label, color=color, edgecolor="black")
-        for bar in bars:
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.005,
-                    f"{bar.get_height():.3f}", ha="center", va="bottom", fontsize=7)
+    fig, ax = plt.subplots(figsize=(8.5, 5.2))
+    bars = ax.bar(x, values, width, color=color, edgecolor="black")
+    for bar in bars:
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.01,
+            f"{bar.get_height():.3f}",
+            ha="center",
+            va="bottom",
+            fontsize=10,
+        )
 
-    ax.set_xticks(x + width * 1.5)
+    ax.set_xticks(x)
     ax.set_xticklabels([s.replace("_", "\n") for s in splits], fontsize=11)
-    ax.set_ylim(0, 1.1)
-    ax.set_ylabel("Score", fontsize=12)
-    ax.set_title("Cross-Split Generalization: Regression Model", fontsize=13, fontweight="bold")
-    ax.legend(fontsize=10)
+    ax.set_ylim(0, max(1.0, max(values) + 0.08))
+    ax.set_ylabel("Kendall's Tau", fontsize=12)
+    ax.set_title("Cross-Split Generalization: Kendall's Tau", fontsize=13, fontweight="bold")
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
+    ax.grid(axis="y", linestyle="--", alpha=0.25)
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -191,7 +198,7 @@ def main() -> None:
     model.eval()
 
     print(f"\n{'=' * 60}")
-    print(f"Cross-Split Generalization Evaluation (Regression)")
+    print("Cross-Split Generalization Evaluation (Regression)")
     print(f"Checkpoint: {args.checkpoint_path.name}")
     print(f"Device: {device}")
     print(f"{'=' * 60}")
@@ -233,11 +240,11 @@ def main() -> None:
     print(f"Saved JSON -> {json_path}")
 
     if len(results) >= 2:
-        best = max(results, key=lambda r: r["spearman"])
-        worst = min(results, key=lambda r: r["spearman"])
-        drop = best["spearman"] - worst["spearman"]
+        best = max(results, key=lambda r: r["kendall"])
+        worst = min(results, key=lambda r: r["kendall"])
+        drop = best["kendall"] - worst["kendall"]
         print(
-            f"\nNote: Spearman drops {drop:.4f} from '{best['split']}' → '{worst['split']}'. "
+            f"\nNote: Kendall's Tau drops {drop:.4f} from '{best['split']}' to '{worst['split']}'. "
             f"{'Large drop suggests limited generalization.' if drop > 0.05 else 'Small drop suggests good generalization.'}"
         )
 

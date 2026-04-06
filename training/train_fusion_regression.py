@@ -126,8 +126,11 @@ def compute_regression_metrics(
     targets: np.ndarray,
 ) -> dict[str, float]:
     rmse = float(np.sqrt(mean_squared_error(targets, predictions)))
+    kendall = float(pd.Series(targets).corr(pd.Series(predictions), method="kendall"))
     spearman = float(pd.Series(targets).corr(pd.Series(predictions), method="spearman"))
 
+    if np.isnan(kendall):
+        kendall = 0.0
     if np.isnan(spearman):
         spearman = 0.0
 
@@ -135,6 +138,7 @@ def compute_regression_metrics(
         "mae": float(mean_absolute_error(targets, predictions)),
         "rmse": rmse,
         "r2": float(r2_score(targets, predictions)),
+        "kendall": kendall,
         "spearman": spearman,
     }
 
@@ -185,6 +189,7 @@ def train_regression(
         "val_mae": [],
         "val_rmse": [],
         "val_r2": [],
+        "val_kendall": [],
         "val_spearman": [],
     }
 
@@ -216,6 +221,7 @@ def train_regression(
         history["val_mae"].append(val_metrics["mae"])
         history["val_rmse"].append(val_metrics["rmse"])
         history["val_r2"].append(val_metrics["r2"])
+        history["val_kendall"].append(val_metrics["kendall"])
         history["val_spearman"].append(val_metrics["spearman"])
 
         print(
@@ -225,6 +231,7 @@ def train_regression(
             f"Val MAE: {val_metrics['mae']:.4f} | "
             f"Val RMSE: {val_metrics['rmse']:.4f} | "
             f"Val R2: {val_metrics['r2']:.4f} | "
+            f"Val Kendall: {val_metrics['kendall']:.4f} | "
             f"Val Spearman: {val_metrics['spearman']:.4f}"
         )
 
