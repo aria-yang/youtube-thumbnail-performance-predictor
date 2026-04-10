@@ -1,21 +1,19 @@
 from __future__ import annotations
+from thumbnail_performance.face_emotion_detection import resolve_thumbnail_path
+from thumbnail_performance.config import DATA_DIR, FIGURES_DIR
+from PIL import Image
+from deepface import DeepFace
+from facenet_pytorch import MTCNN
+import matplotlib
+import matplotlib.patches as patches
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+from pathlib import Path
 import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
-from pathlib import Path
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-import matplotlib
 matplotlib.use("Agg")
-
-from facenet_pytorch import MTCNN
-from deepface import DeepFace
-from PIL import Image
-
-from thumbnail_performance.config import DATA_DIR, FIGURES_DIR
-from thumbnail_performance.face_emotion_detection import resolve_thumbnail_path
 
 
 N_SAMPLES = 4

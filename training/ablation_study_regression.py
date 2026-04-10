@@ -2,15 +2,15 @@ import argparse
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from loguru import logger
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import torch
 import torch.nn as nn
-from loguru import logger
 from torch.utils.data import DataLoader, Subset
 
-from thumbnail_performance.config import DATA_DIR, PROCESSED_DATA_DIR
+from thumbnail_performance.config import DATA_DIR
 from thumbnail_performance.dataset import ThumbnailDataset, read_csv_with_fallback
 from thumbnail_performance.modeling.fusion_mlp import FusionMLP
 from training.train_fusion_regression import (
@@ -79,10 +79,11 @@ def run_ablation_experiment(args: argparse.Namespace) -> pd.DataFrame:
 
     split_df = read_csv_with_fallback(args.csv_path)
     split_df["Id"] = split_df["Id"].astype(str)
-    train_ids, val_ids, _ = load_saved_split_ids(args.split_dir, args.split_name)
+    train_ids, val_ids, test_ids = load_saved_split_ids(args.split_dir, args.split_name)
     id_to_idx = {video_id: idx for idx, video_id in enumerate(split_df["Id"])}
     train_indices = [id_to_idx[video_id] for video_id in split_df["Id"] if video_id in train_ids]
     val_indices = [id_to_idx[video_id] for video_id in split_df["Id"] if video_id in val_ids]
+    test_indices = [id_to_idx[video_id] for video_id in split_df["Id"] if video_id in test_ids]
 
     cnn_dim = int(np.load(cnn_path, mmap_mode="r").shape[1])
     text_dim = int(np.load(args.text_path, mmap_mode="r").shape[1])
@@ -95,7 +96,7 @@ def run_ablation_experiment(args: argparse.Namespace) -> pd.DataFrame:
         {"name": "CNN + Text + Face", "use_text": True, "use_face": True},
     ]
     seeds = [int(seed.strip()) for seed in args.seeds.split(",") if seed.strip()]
-    results = []
+    results: list[dict[str, float | int | str]] = []
 
     logger.info(
         f"Starting regression ablation study over {len(seeds)} seeds on {device.upper()} "
@@ -115,6 +116,11 @@ def run_ablation_experiment(args: argparse.Namespace) -> pd.DataFrame:
             )
             val_loader = DataLoader(
                 Subset(dataset, val_indices),
+                batch_size=args.batch_size,
+                shuffle=False,
+            )
+            test_loader = DataLoader(
+                Subset(dataset, test_indices),
                 batch_size=args.batch_size,
                 shuffle=False,
             )
@@ -144,24 +150,27 @@ def run_ablation_experiment(args: argparse.Namespace) -> pd.DataFrame:
                 device=device,
             )
             criterion = build_regression_loss(args.loss)
-            val_loss, val_metrics, _, _ = evaluate_regression(model, val_loader, criterion, device)
+            test_loss, test_metrics, _, _ = evaluate_regression(model, test_loader, criterion, device)
 
             results.append(
                 {
                     "model": config["name"],
                     "seed": seed,
                     "epochs_ran": len(history["train_loss"]),
-                    "val_loss": val_loss,
-                    "val_mae": val_metrics["mae"],
-                    "val_rmse": val_metrics["rmse"],
-                    "val_r2": val_metrics["r2"],
-                    "val_spearman": val_metrics["spearman"],
+                    "test_loss": test_loss,
+                    "test_mae": test_metrics["mae"],
+                    "test_rmse": test_metrics["rmse"],
+                    "test_r2": test_metrics["r2"],
+                    "test_kendall": test_metrics["kendall"],
+                    "test_spearman": test_metrics["spearman"],
                 }
             )
             logger.info(
                 f"--> {config['name']} | seed={seed} | "
-                f"MAE={val_metrics['mae']:.4f} | RMSE={val_metrics['rmse']:.4f} | "
-                f"R2={val_metrics['r2']:.4f} | Spearman={val_metrics['spearman']:.4f}"
+                f"MAE={test_metrics['mae']:.4f} | RMSE={test_metrics['rmse']:.4f} | "
+                f"R2={test_metrics['r2']:.4f} | "
+                f"Kendall={test_metrics['kendall']:.4f} | "
+                f"Spearman={test_metrics['spearman']:.4f}"
             )
 
     return pd.DataFrame(results)
@@ -175,18 +184,18 @@ def generate_ablation_outputs(
     output_dir.mkdir(exist_ok=True, parents=True)
 
     summary = (
-        df_results.groupby("model")[["val_mae", "val_rmse", "val_r2", "val_spearman"]]
+        df_results.groupby("model")[
+            ["test_mae", "test_rmse", "test_r2", "test_kendall", "test_spearman"]
+        ]
         .agg(["mean", "std"])
         .reset_index()
     )
     summary.columns = [
         "_".join(col).strip("_") if isinstance(col, tuple) else col for col in summary.columns
     ]
-    # Match the discretized ablation plot convention: show weaker-performing models
-    # on the left and stronger-performing models on the right.
     summary = summary.sort_values(
         f"{ranking_metric}_mean",
-        ascending=ranking_metric in {"val_r2", "val_spearman"},
+        ascending=ranking_metric in {"test_mae", "test_rmse"},
     ).reset_index(drop=True)
 
     summary_path = output_dir / "ablation_regression_summary.csv"
@@ -194,6 +203,15 @@ def generate_ablation_outputs(
     plot_path = output_dir / f"ablation_regression_{ranking_metric}.png"
     df_results.to_csv(raw_path, index=False)
     summary.to_csv(summary_path, index=False)
+
+    metric_labels = {
+        "test_mae": "Test MAE",
+        "test_rmse": "Test RMSE",
+        "test_r2": "Test R^2",
+        "test_kendall": "Test Kendall's Tau",
+        "test_spearman": "Test Spearman",
+    }
+    ranking_label = metric_labels.get(ranking_metric, ranking_metric.replace("_", " ").title())
 
     plot_order = ["CNN-only", "CNN + Text", "CNN + Face", "CNN + Text + Face"]
     plt.figure(figsize=(10, 6))
@@ -214,8 +232,8 @@ def generate_ablation_outputs(
         alpha=0.6,
         jitter=True,
     )
-    plt.title("Regression Multimodal Ablation Study", fontsize=14, pad=15)
-    plt.ylabel(ranking_metric.replace("_", " ").title(), fontsize=12)
+    plt.title(f"Regression Ablation Study: {ranking_label}", fontsize=14, pad=15)
+    plt.ylabel(ranking_label, fontsize=12)
     plt.xlabel("Modality Configuration", fontsize=12)
     plt.grid(axis="y", linestyle="--", alpha=0.7)
     plt.tight_layout()
@@ -251,15 +269,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ranking_metric",
         type=str,
-        default="val_spearman",
-        choices=["val_mae", "val_rmse", "val_r2", "val_spearman"],
+        default="test_kendall",
+        choices=["test_mae", "test_rmse", "test_r2", "test_kendall", "test_spearman"],
     )
     parser.add_argument("--output_dir", type=Path, default=Path("outputs"))
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument(
         "--artifact_root",
         type=Path,
-        default=Path("/content/drive/MyDrive/ECE324/youtube-thumbnail-performance-predictor-artifacts"),
+        default=Path("/content/drive/MyDrive/youtube-thumbnail-performance-predictor-artifacts"),
     )
     return parser.parse_args()
 
